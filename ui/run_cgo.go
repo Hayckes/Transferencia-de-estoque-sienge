@@ -29,7 +29,7 @@ func Run() {
 		return
 	}
 
-	state := NewAppState(cfg)
+	state := NewAppStateWithStore(cfg, store)
 	state.Runner = NewAsyncRunner(fyne.Do)
 	window.SetContent(BuildMainContent(state))
 	window.ShowAndRun()

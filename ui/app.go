@@ -13,12 +13,19 @@ const appID = "br.com.sienge-transfer.app"
 
 type AppState struct {
 	Config        models.Config
+	Store         ConfigStore
 	Status        string
 	Obras         ObrasTabState
 	Consulta      ConsultaTabState
 	Transferencia TransferenciaTabState
 	Historico     HistoricoTabState
 	Runner        AsyncRunner
+}
+
+func NewAppStateWithStore(cfg models.Config, store ConfigStore) *AppState {
+	state := NewAppState(cfg)
+	state.Store = store
+	return state
 }
 
 func NewAppState(cfg models.Config) *AppState {

@@ -241,6 +241,7 @@ func validCompleteOnboardingInput() CompleteOnboardingInput {
 
 type fakeConfigStore struct {
 	loadErr            error
+	saveErr            error
 	loadedConfig       models.Config
 	saved              bool
 	savedConfig        models.Config
@@ -256,6 +257,9 @@ func (s *fakeConfigStore) Load() (models.Config, error) {
 }
 
 func (s *fakeConfigStore) Save(cfg models.Config) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.saved = true
 	s.savedConfig = cfg
 	return nil
