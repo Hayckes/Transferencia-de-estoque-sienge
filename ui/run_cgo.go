@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/widget"
 
+	"sienge-transfer/api"
 	"sienge-transfer/config"
 )
 
@@ -30,6 +31,10 @@ func Run() {
 	}
 
 	state := NewAppStateWithStore(cfg, store)
+	client, err := api.NewClient(cfg.Empresa.Subdominio, cfg.Empresa.APIUsuario, cfg.Empresa.APISenha)
+	if err == nil {
+		state.Stock = client
+	}
 	state.Runner = NewAsyncRunner(fyne.Do)
 	window.SetContent(BuildMainContent(state))
 	window.ShowAndRun()

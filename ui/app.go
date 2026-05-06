@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 
 	"fyne.io/fyne/v2"
@@ -14,12 +15,18 @@ const appID = "br.com.sienge-transfer.app"
 type AppState struct {
 	Config        models.Config
 	Store         ConfigStore
+	Stock         StockService
 	Status        string
 	Obras         ObrasTabState
 	Consulta      ConsultaTabState
 	Transferencia TransferenciaTabState
 	Historico     HistoricoTabState
 	Runner        AsyncRunner
+}
+
+type StockService interface {
+	GetStockItemsByIDs(ctx context.Context, costCenterID int, ids []int) ([]models.Insumo, error)
+	GetBuildingAppropriations(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error)
 }
 
 func NewAppStateWithStore(cfg models.Config, store ConfigStore) *AppState {
