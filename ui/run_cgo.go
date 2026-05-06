@@ -9,6 +9,7 @@ import (
 
 	"sienge-transfer/api"
 	"sienge-transfer/config"
+	"sienge-transfer/storage"
 )
 
 func Run() {
@@ -34,7 +35,10 @@ func Run() {
 	client, err := api.NewClient(cfg.Empresa.Subdominio, cfg.Empresa.APIUsuario, cfg.Empresa.APISenha)
 	if err == nil {
 		state.Stock = client
+		state.Transfer = client
 	}
+	dataStore := storage.NewStore(store.Dir)
+	state.TransferStore = dataStore
 	state.Runner = NewAsyncRunner(fyne.Do)
 	window.SetContent(BuildMainContent(state))
 	window.ShowAndRun()

@@ -16,6 +16,8 @@ type AppState struct {
 	Config        models.Config
 	Store         ConfigStore
 	Stock         StockService
+	Transfer      TransferService
+	TransferStore TransferStorage
 	Status        string
 	Obras         ObrasTabState
 	Consulta      ConsultaTabState
@@ -27,6 +29,15 @@ type AppState struct {
 type StockService interface {
 	GetStockItemsByIDs(ctx context.Context, costCenterID int, ids []int) ([]models.Insumo, error)
 	GetBuildingAppropriations(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error)
+}
+
+type TransferService interface {
+	CreateStockTransfer(ctx context.Context, transfer models.Transferencia) (string, error)
+}
+
+type TransferStorage interface {
+	AppendHistory(transfer models.Transferencia) error
+	AppendTransferToExcel(transfer models.Transferencia) error
 }
 
 func NewAppStateWithStore(cfg models.Config, store ConfigStore) *AppState {
