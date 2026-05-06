@@ -69,6 +69,7 @@ type ItemTransferido struct {
 	Apropriacao          string  `json:"apropriacao"`
 	ApropriacaoDescricao string  `json:"apropriacao_descricao,omitempty"`
 	Quantidade           float64 `json:"quantidade"`
+	QuantidadeDisponivel float64 `json:"quantidade_disponivel,omitempty"`
 }
 
 func (o Obra) Label() string {

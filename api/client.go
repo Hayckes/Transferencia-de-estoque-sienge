@@ -32,6 +32,12 @@ type APIError struct {
 	Body       string
 }
 
+type apiResponse struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+}
+
 func (e *APIError) Error() string {
 	if e.Body == "" {
 		return e.Message
@@ -95,6 +101,15 @@ func (c *Client) PostJSON(ctx context.Context, path string, payload any) ([]byte
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	resp, err := c.doResponse(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Body, nil
+}
+
+func (c *Client) doResponse(ctx context.Context, method, path string, body []byte) (*apiResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -140,7 +155,11 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]by
 		return nil, newAPIError(resp.StatusCode, respBody)
 	}
 
-	return respBody, nil
+	return &apiResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header.Clone(),
+		Body:       respBody,
+	}, nil
 }
 
 func (c *Client) endpoint(path string) (string, error) {
