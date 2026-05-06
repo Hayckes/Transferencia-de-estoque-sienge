@@ -39,6 +39,8 @@ func Run() {
 	}
 	dataStore := storage.NewStore(store.Dir)
 	state.TransferStore = dataStore
+	state.HistoryStore = dataStore
+	state.FileOpener = SystemFileOpener{}
 	state.Runner = NewAsyncRunner(fyne.Do)
 	window.SetContent(BuildMainContent(state))
 	window.ShowAndRun()

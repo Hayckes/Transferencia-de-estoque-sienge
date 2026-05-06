@@ -347,6 +347,9 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 	if err := state.TransferStore.AppendTransferToExcel(transfer); err != nil {
 		return "", err
 	}
+	if state.HistoryStore != nil {
+		_ = RefreshHistorico(state)
+	}
 
 	ClearTransferencia(state)
 	return movementID, nil

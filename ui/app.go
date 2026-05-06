@@ -8,6 +8,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 	"sienge-transfer/models"
+	"sienge-transfer/storage"
 )
 
 const appID = "br.com.sienge-transfer.app"
@@ -18,6 +19,8 @@ type AppState struct {
 	Stock         StockService
 	Transfer      TransferService
 	TransferStore TransferStorage
+	HistoryStore  HistoryStorage
+	FileOpener    FileOpener
 	Status        string
 	Obras         ObrasTabState
 	Consulta      ConsultaTabState
@@ -38,6 +41,16 @@ type TransferService interface {
 type TransferStorage interface {
 	AppendHistory(transfer models.Transferencia) error
 	AppendTransferToExcel(transfer models.Transferencia) error
+}
+
+type HistoryStorage interface {
+	ReadHistorySummary() ([]storage.HistoricoResumo, error)
+	EnsureExcelFromHistory() error
+	ExcelPath() string
+}
+
+type FileOpener interface {
+	Open(path string) error
 }
 
 func NewAppStateWithStore(cfg models.Config, store ConfigStore) *AppState {
