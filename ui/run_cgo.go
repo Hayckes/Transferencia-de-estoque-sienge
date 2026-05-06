@@ -5,11 +5,8 @@ package ui
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/widget"
 
-	"sienge-transfer/api"
 	"sienge-transfer/config"
-	"sienge-transfer/storage"
 )
 
 func Run() {
@@ -24,24 +21,27 @@ func Run() {
 		return
 	}
 
-	cfg, err := store.Load()
-	if err != nil {
-		window.SetContent(widget.NewLabel("Configuracao inicial necessaria. A interface de onboarding sera aberta na proxima etapa."))
+	if needsOnboarding, err := NeedsOnboarding(store); err != nil {
+		window.SetContent(BuildFatalErrorContent(StatusMessageForError(err)))
+		window.ShowAndRun()
+		return
+	} else if needsOnboarding {
+		window.SetContent(BuildOnboardingContent(window, store, func(cfg configLoaded) {
+			state := NewConfiguredAppState(cfg.Config, store, window)
+			window.SetContent(BuildMainContent(state))
+		}))
 		window.ShowAndRun()
 		return
 	}
 
-	state := NewAppStateWithStore(cfg, store)
-	client, err := api.NewClient(cfg.Empresa.Subdominio, cfg.Empresa.APIUsuario, cfg.Empresa.APISenha)
-	if err == nil {
-		state.Stock = client
-		state.Transfer = client
+	cfg, err := store.Load()
+	if err != nil {
+		window.SetContent(BuildFatalErrorContent(StatusMessageForError(err)))
+		window.ShowAndRun()
+		return
 	}
-	dataStore := storage.NewStore(store.Dir)
-	state.TransferStore = dataStore
-	state.HistoryStore = dataStore
-	state.FileOpener = SystemFileOpener{}
-	state.Runner = NewAsyncRunner(fyne.Do)
+
+	state := NewConfiguredAppState(cfg, store, window)
 	window.SetContent(BuildMainContent(state))
 	window.ShowAndRun()
 }

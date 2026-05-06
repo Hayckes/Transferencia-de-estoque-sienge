@@ -89,25 +89,57 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 			return AddTransferInsumoFromInput(context.Background(), state, state.Transferencia.InsumoIDInput)
 		}, func(err error) {
 			if err != nil {
+				var multipleErr *MultipleInsumosError
+				if errors.As(err, &multipleErr) {
+					ShowInsumoSelectionModal(state.Window, multipleErr.Options, func(item models.Insumo) {
+						state.Runner.Run(func() error {
+							return AddSelectedTransferInsumo(context.Background(), state, item)
+						}, func(err error) {
+							if err != nil {
+								status.SetText(err.Error())
+								return
+							}
+							status.SetText("Insumo adicionado.")
+							state.Refresh()
+						})
+					})
+					status.SetText(err.Error())
+					return
+				}
+				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+					return
+				}
 				status.SetText(err.Error())
 				return
 			}
 			insumoEntry.SetText("")
 			status.SetText("Insumo adicionado.")
+			state.Refresh()
 		})
 	})
 
 	sendButton := widget.NewButton("Enviar Transferencia", func() {
-		status.SetText(StatusLoading)
-		state.Runner.Run(func() error {
-			_, err := SendTransferencia(context.Background(), state)
-			return err
-		}, func(err error) {
-			if err != nil {
-				status.SetText(err.Error())
-				return
-			}
-			status.SetText("Transferencia enviada com sucesso.")
+		transfer, err := BuildTransferenciaFromState(state)
+		if err != nil {
+			status.SetText(err.Error())
+			return
+		}
+		ShowConfirmTransferModal(state.Window, transfer, func() {
+			status.SetText(StatusLoading)
+			state.Runner.Run(func() error {
+				_, err := SendTransferencia(context.Background(), state)
+				return err
+			}, func(err error) {
+				if err != nil {
+					if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+						return
+					}
+					status.SetText(err.Error())
+					return
+				}
+				status.SetText("Transferencia enviada com sucesso.")
+				state.Refresh()
+			})
 		})
 	})
 
@@ -129,6 +161,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		removeButton := widget.NewButton("Remover", func() {
 			_ = RemoveTransferItem(state, rowIndex)
 			status.SetText("Insumo removido.")
+			state.Refresh()
 		})
 		rows = append(rows, container.NewHBox(
 			widget.NewLabel(TransferItemLabel(item.Insumo)),
@@ -147,6 +180,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		movimentoEntry.SetText("3")
 		insumoEntry.SetText("")
 		status.SetText("Transferencia limpa.")
+		state.Refresh()
 	})
 
 	return container.NewVBox(

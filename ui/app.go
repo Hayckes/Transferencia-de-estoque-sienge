@@ -27,6 +27,8 @@ type AppState struct {
 	Transferencia TransferenciaTabState
 	Historico     HistoricoTabState
 	Runner        AsyncRunner
+	Window        fyne.Window
+	RefreshUI     func()
 }
 
 type StockService interface {
@@ -89,6 +91,12 @@ func BuildMainContent(state *AppState) fyne.CanvasObject {
 		nil,
 		tabs,
 	)
+}
+
+func (state *AppState) Refresh() {
+	if state != nil && state.RefreshUI != nil {
+		state.RefreshUI()
+	}
 }
 
 func BuildTopBar(cfg models.Config) fyne.CanvasObject {

@@ -58,6 +58,7 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 		idEntry.SetText("")
 		nomeEntry.SetText("")
 		status.SetText("Obra adicionada com sucesso.")
+		state.Refresh()
 	})
 
 	items := make([]fyne.CanvasObject, 0, len(state.Obras.Obras)+4)
@@ -72,11 +73,19 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 		items = append(items, container.NewHBox(
 			widget.NewLabel(obra.Label()),
 			widget.NewButton("Remover", func() {
-				if err := RemoveObraConfirmada(state, obraID, true); err != nil {
-					status.SetText(err.Error())
+				remove := func() {
+					if err := RemoveObraConfirmada(state, obraID, true); err != nil {
+						status.SetText(err.Error())
+						return
+					}
+					status.SetText("Obra removida com sucesso.")
+					state.Refresh()
+				}
+				if state.Window == nil {
+					remove()
 					return
 				}
-				status.SetText("Obra removida com sucesso.")
+				ShowConfirmRemoveObra(state.Window, remove)
 			}),
 		))
 	}

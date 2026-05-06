@@ -55,10 +55,14 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 			return RunConsulta(context.Background(), state)
 		}, func(err error) {
 			if err != nil {
+				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+					return
+				}
 				status.SetText(err.Error())
 				return
 			}
 			status.SetText(fmt.Sprintf("Consulta concluida. %d item(ns) encontrado(s).", len(state.Consulta.Resultados)))
+			state.Refresh()
 		})
 	})
 
@@ -68,11 +72,16 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		rowIndex := index
 		label := widget.NewLabel(ConsultaResultRow(item))
 		detalhes := widget.NewButton("Detalhes", func() {
-			if _, err := LoadConsultaDetalhe(context.Background(), state, rowIndex); err != nil {
+			item, err := LoadConsultaDetalhe(context.Background(), state, rowIndex)
+			if err != nil {
+				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+					return
+				}
 				status.SetText(err.Error())
 				return
 			}
-			status.SetText(BuildAppropriationDetailsText(*state.Consulta.DetalheAberto))
+			ShowInsumoDetailsModal(state.Window, item)
+			status.SetText("Detalhes carregados.")
 		})
 		resultRows = append(resultRows, container.NewHBox(label, detalhes))
 	}
@@ -83,6 +92,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		idsEntry.SetText("")
 		observacao.SetText("")
 		status.SetText("Consulta limpa.")
+		state.Refresh()
 	})
 
 	return container.NewVBox(
