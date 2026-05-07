@@ -40,6 +40,9 @@ func TestBuildStockTransferPayloadWithSingleItem(t *testing.T) {
 	if !strings.Contains(payload.Note, "Transferencia realizada por Joao Silva (Engenheiro)") {
 		t.Fatalf("Note = %q, want user and role", payload.Note)
 	}
+	if !strings.Contains(payload.Note, "Observacao: Prioridade alta") {
+		t.Fatalf("Note = %q, want observation", payload.Note)
+	}
 }
 
 func TestBuildStockTransferPayloadWithMultipleItems(t *testing.T) {
@@ -98,7 +101,8 @@ func TestValidateTransferenciaRejectsInvalidItems(t *testing.T) {
 		want   string
 	}{
 		{name: "missing supply id", mutate: func(i *models.ItemTransferido) { i.ID = 0 }, want: "ID do insumo"},
-		{name: "missing appropriation", mutate: func(i *models.ItemTransferido) { i.Apropriacao = "" }, want: "apropriacao"},
+		{name: "missing origin appropriation", mutate: func(i *models.ItemTransferido) { i.Apropriacao = "" }, want: "origem"},
+		{name: "missing destination appropriation", mutate: func(i *models.ItemTransferido) { i.ApropriacaoDestino = "" }, want: "destino"},
 		{name: "zero quantity", mutate: func(i *models.ItemTransferido) { i.Quantidade = 0 }, want: "maior que zero"},
 		{name: "negative quantity", mutate: func(i *models.ItemTransferido) { i.Quantidade = -1 }, want: "maior que zero"},
 		{name: "quantity greater than available", mutate: func(i *models.ItemTransferido) { i.Quantidade = 11; i.QuantidadeDisponivel = 10 }, want: "maior que a disponivel"},
@@ -135,7 +139,7 @@ func TestBuildStockTransferPayloadReturnsValidationError(t *testing.T) {
 func TestBuildTransferNoteIncludesRequiredContextAndNoSecrets(t *testing.T) {
 	note := BuildTransferNote(validTransferencia())
 
-	for _, want := range []string{"Joao Silva", "Engenheiro", "Maria Santos", "121 - Residencial", "205 - Comercial", "3421", "A001", "50"} {
+	for _, want := range []string{"Joao Silva", "Engenheiro", "Maria Santos", "Prioridade alta", "121 - Residencial", "205 - Comercial", "3421", "A001", "50"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("note = %q, want containing %q", note, want)
 		}
@@ -150,8 +154,8 @@ func TestCreateStockTransferPostsPayloadAndExtractsIDFromBody(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if r.URL.String() != "/sienge/api/public/v1/stock-transfers" {
-			t.Fatalf("URL = %s, want /sienge/api/public/v1/stock-transfers", r.URL.String())
+		if r.URL.String() != "/public/api/v1/stock-transfers" {
+			t.Fatalf("URL = %s, want /public/api/v1/stock-transfers", r.URL.String())
 		}
 
 		var payload StockTransferPayload
@@ -287,6 +291,7 @@ func validTransferencia() models.Transferencia {
 		Usuario:             "Joao Silva",
 		Cargo:               "Engenheiro",
 		Solicitante:         "Maria Santos",
+		Observacao:          "Prioridade alta",
 		ObraOrigemID:        121,
 		ObraOrigemNome:      "Residencial Novo Horizonte",
 		ObraDestinoID:       205,
@@ -301,6 +306,7 @@ func validTransferencia() models.Transferencia {
 				Marca:                "Votorantim",
 				Apropriacao:          "A001",
 				ApropriacaoDescricao: "Fundacao",
+				ApropriacaoDestino:   "D001",
 				Quantidade:           50,
 				QuantidadeDisponivel: 150,
 			},
@@ -311,6 +317,7 @@ func validTransferencia() models.Transferencia {
 				Marca:                "Regional",
 				Apropriacao:          "A002",
 				ApropriacaoDescricao: "Estrutura",
+				ApropriacaoDestino:   "D002",
 				Quantidade:           20.5,
 				QuantidadeDisponivel: 30,
 			},

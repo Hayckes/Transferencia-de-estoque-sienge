@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -102,7 +101,10 @@ func ValidateTransferencia(transfer models.Transferencia) []string {
 			validationErrors = append(validationErrors, prefix+": ID do insumo deve ser numerico positivo")
 		}
 		if strings.TrimSpace(item.Apropriacao) == "" {
-			validationErrors = append(validationErrors, prefix+": apropriacao obrigatoria")
+			validationErrors = append(validationErrors, prefix+": apropriacao de origem obrigatoria")
+		}
+		if strings.TrimSpace(item.ApropriacaoDestino) == "" {
+			validationErrors = append(validationErrors, prefix+": apropriacao de destino obrigatoria")
 		}
 		if item.Quantidade <= 0 {
 			validationErrors = append(validationErrors, prefix+": quantidade deve ser maior que zero")
@@ -123,17 +125,21 @@ func BuildTransferNote(transfer models.Transferencia) string {
 		fmt.Sprintf("Origem: %d - %s.", transfer.ObraOrigemID, strings.TrimSpace(transfer.ObraOrigemNome)),
 		fmt.Sprintf("Destino: %d - %s.", transfer.ObraDestinoID, strings.TrimSpace(transfer.ObraDestinoNome)),
 	}
+	if observation := strings.TrimSpace(transfer.Observacao); observation != "" {
+		parts = append(parts, fmt.Sprintf("Observacao: %s.", observation))
+	}
 
 	itemParts := make([]string, 0, len(transfer.Insumos))
 	for _, item := range transfer.Insumos {
 		itemParts = append(itemParts, fmt.Sprintf(
-			"%d - %s %s - %s | apropriacao %s | quantidade %s",
+			"%d - %s %s - %s | apropriacao origem %s | apropriacao destino %s | quantidade %s",
 			item.ID,
 			strings.TrimSpace(item.Nome),
 			strings.TrimSpace(item.Detalhe),
 			strings.TrimSpace(item.Marca),
 			strings.TrimSpace(item.Apropriacao),
-			strconv.FormatFloat(item.Quantidade, 'f', -1, 64),
+			strings.TrimSpace(item.ApropriacaoDestino),
+			models.FormatQuantidade(item.Quantidade, ""),
 		))
 	}
 	if len(itemParts) > 0 {

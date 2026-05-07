@@ -13,15 +13,24 @@ import (
 
 const appID = "br.com.sienge-transfer.app"
 
+const (
+	TabObras         = "Obras"
+	TabConsulta      = "Consulta"
+	TabTransferencia = "Transferencia"
+	TabHistorico     = "Historico"
+)
+
 type AppState struct {
 	Config        models.Config
 	Store         ConfigStore
 	Stock         StockService
+	CostCenters   CostCenterService
 	Transfer      TransferService
 	TransferStore TransferStorage
 	HistoryStore  HistoryStorage
 	FileOpener    FileOpener
 	Status        string
+	ActiveTab     string
 	Obras         ObrasTabState
 	Consulta      ConsultaTabState
 	Transferencia TransferenciaTabState
@@ -34,6 +43,10 @@ type AppState struct {
 type StockService interface {
 	GetStockItemsByIDs(ctx context.Context, costCenterID int, ids []int) ([]models.Insumo, error)
 	GetBuildingAppropriations(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error)
+}
+
+type CostCenterService interface {
+	GetCostCenters(ctx context.Context, costCenterID int) ([]models.Obra, error)
 }
 
 type TransferService interface {
@@ -65,6 +78,7 @@ func NewAppState(cfg models.Config) *AppState {
 	return &AppState{
 		Config:        cfg,
 		Status:        "Pronto.",
+		ActiveTab:     TabObras,
 		Obras:         NewObrasTabState(cfg),
 		Consulta:      NewConsultaTabState(),
 		Transferencia: NewTransferenciaTabState(),
@@ -76,26 +90,52 @@ func NewAppState(cfg models.Config) *AppState {
 func BuildMainContent(state *AppState) fyne.CanvasObject {
 	statusLabel := widget.NewLabel(state.Status)
 
-	tabs := container.NewAppTabs(
-		container.NewTabItem("Obras", BuildObrasTab(state)),
-		container.NewTabItem("Consulta", BuildConsultaTab(state)),
-		container.NewTabItem("Transferencia", BuildTransferenciaTab(state)),
-		container.NewTabItem("Historico", BuildHistoricoTab(state)),
-	)
-	tabs.SetTabLocation(container.TabLocationTop)
-
 	return container.NewBorder(
 		BuildTopBar(state.Config),
 		container.NewBorder(nil, nil, widget.NewLabel("Status:"), nil, statusLabel),
 		nil,
 		nil,
-		tabs,
+		BuildMainTabs(state),
 	)
+}
+
+func BuildMainTabs(state *AppState) *container.AppTabs {
+	tabs := container.NewAppTabs(
+		container.NewTabItem(TabObras, BuildObrasTab(state)),
+		container.NewTabItem(TabConsulta, BuildConsultaTab(state)),
+		container.NewTabItem(TabTransferencia, BuildTransferenciaTab(state)),
+		container.NewTabItem(TabHistorico, BuildHistoricoTab(state)),
+	)
+	tabs.SetTabLocation(container.TabLocationTop)
+	tabs.OnSelected = func(tab *container.TabItem) {
+		if tab != nil {
+			state.ActiveTab = tab.Text
+		}
+	}
+
+	selectMainTab(tabs, state.ActiveTab)
+	return tabs
+}
+
+func selectMainTab(tabs *container.AppTabs, title string) {
+	for _, item := range tabs.Items {
+		if item.Text == title {
+			tabs.Select(item)
+			return
+		}
+	}
 }
 
 func (state *AppState) Refresh() {
 	if state != nil && state.RefreshUI != nil {
 		state.RefreshUI()
+	}
+}
+
+func (state *AppState) RefreshTab(tab string) {
+	if state != nil {
+		state.ActiveTab = tab
+		state.Refresh()
 	}
 }
 

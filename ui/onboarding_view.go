@@ -42,10 +42,10 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Credenciais Sienge"),
-			empresa,
-			subdominio,
-			usuario,
-			senha,
+			withMinTypingInputWidth(empresa),
+			withMinTypingInputWidth(subdominio),
+			withMinTypingInputWidth(usuario),
+			withMinTypingInputWidth(senha),
 			status,
 			widget.NewButton("Validar e continuar", func() {
 				credentials = CredentialsInput{EmpresaNome: empresa.Text, Subdominio: subdominio.Text, APIUsuario: usuario.Text, APISenha: senha.Text}
@@ -78,8 +78,8 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 		cargo.SetPlaceHolder("Cargo/Função")
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Usuario"),
-			nome,
-			cargo,
+			withMinTypingInputWidth(nome),
+			withMinTypingInputWidth(cargo),
 			status,
 			container.NewHBox(
 				widget.NewButton("Voltar", showStep1),
@@ -124,7 +124,7 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Obras"),
-			container.NewHBox(idEntry, nomeEntry, widget.NewButton("+ Adicionar outra obra", add)),
+			container.NewHBox(withMinTypingInputWidth(idEntry), withMinTypingInputWidth(nomeEntry), widget.NewButton("+ Adicionar outra obra", add)),
 			lista,
 			status,
 			container.NewHBox(

@@ -46,11 +46,13 @@ func ConfigureAPIClient(state *AppState) error {
 	client, err := api.NewClient(state.Config.Empresa.Subdominio, state.Config.Empresa.APIUsuario, state.Config.Empresa.APISenha)
 	if err != nil {
 		state.Stock = nil
+		state.CostCenters = nil
 		state.Transfer = nil
 		return err
 	}
 
 	state.Stock = client
+	state.CostCenters = client
 	state.Transfer = client
 	return nil
 }

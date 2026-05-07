@@ -16,21 +16,6 @@ import (
 	"sienge-transfer/models"
 )
 
-func ShowInsumoDetailsModal(window fyne.Window, item models.Insumo) {
-	if window == nil {
-		return
-	}
-	rows := []fyne.CanvasObject{
-		widget.NewLabel(fmt.Sprintf("%s %s - %s", item.Nome, item.Detalhe, item.Marca)),
-		widget.NewSeparator(),
-		widget.NewLabel("Codigo | Descricao | Quantidade disponivel"),
-	}
-	for _, appropriation := range item.Apropriacoes {
-		rows = append(rows, widget.NewLabel(fmt.Sprintf("%s | %s | %s", appropriation.Codigo, appropriation.Descricao, models.FormatQuantidade(appropriation.Quantidade, item.Unidade))))
-	}
-	dialog.ShowCustom("Detalhes do Insumo", "Fechar", container.NewVScroll(container.NewVBox(rows...)), window)
-}
-
 func ShowInsumoSelectionModal(window fyne.Window, options []models.Insumo, onSelect func(models.Insumo)) {
 	if window == nil || len(options) == 0 {
 		return
@@ -47,7 +32,10 @@ func ShowInsumoSelectionModal(window fyne.Window, options []models.Insumo, onSel
 			}),
 		))
 	}
-	dialog.ShowCustom("Selecione o insumo", "Fechar", container.NewVScroll(container.NewVBox(rows...)), window)
+	content := container.NewVScroll(container.NewVBox(rows...))
+	d := dialog.NewCustom("Selecione o insumo", "Fechar", content, window)
+	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), insumoSelectionDialogWidthRatio, insumoSelectionDialogHeightRatio))
+	d.Show()
 }
 
 func ShowConfirmTransferModal(window fyne.Window, transfer models.Transferencia, onConfirm func()) {
@@ -83,9 +71,12 @@ func TransferSummaryText(transfer models.Transferencia) string {
 	builder.WriteString(fmt.Sprintf("Origem: %d - %s\n", transfer.ObraOrigemID, transfer.ObraOrigemNome))
 	builder.WriteString(fmt.Sprintf("Destino: %d - %s\n", transfer.ObraDestinoID, transfer.ObraDestinoNome))
 	builder.WriteString(fmt.Sprintf("Solicitante: %s\n", transfer.Solicitante))
+	if strings.TrimSpace(transfer.Observacao) != "" {
+		builder.WriteString(fmt.Sprintf("Observacao: %s\n", transfer.Observacao))
+	}
 	builder.WriteString("\nInsumos:\n")
 	for _, item := range transfer.Insumos {
-		builder.WriteString(fmt.Sprintf("- %d %s %s %s | %s | %s\n", item.ID, item.Nome, item.Detalhe, item.Marca, item.Apropriacao, models.FormatQuantidade(item.Quantidade, "")))
+		builder.WriteString(fmt.Sprintf("- %d %s %s %s | origem %s | destino %s | %s\n", item.ID, item.Nome, item.Detalhe, item.Marca, item.Apropriacao, item.ApropriacaoDestino, models.FormatQuantidade(item.Quantidade, "")))
 	}
 	return builder.String()
 }
@@ -116,10 +107,10 @@ func ShowCredentialsReonboardingModal(state *AppState, status func(string)) {
 
 	content := container.NewVBox(
 		message,
-		widget.NewLabel("Nome da empresa"), empresa,
-		widget.NewLabel("Subdominio"), subdominio,
-		widget.NewLabel("Usuario API"), usuario,
-		widget.NewLabel("Senha API"), senha,
+		widget.NewLabel("Nome da empresa"), withMinTypingInputWidth(empresa),
+		widget.NewLabel("Subdominio"), withMinTypingInputWidth(subdominio),
+		widget.NewLabel("Usuario API"), withMinTypingInputWidth(usuario),
+		widget.NewLabel("Senha API"), withMinTypingInputWidth(senha),
 	)
 
 	d := dialog.NewCustomConfirm("Refazer Credenciais", "Salvar", "Cancelar", content, func(confirm bool) {

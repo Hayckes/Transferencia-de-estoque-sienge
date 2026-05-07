@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	BasePath       = "/sienge/api/public/v1"
+	BasePath       = "/public/api/v1"
 	DefaultTimeout = 30 * time.Second
 	maxErrorBody   = 4096
 )
@@ -52,7 +52,7 @@ func NewClient(subdomain, username, password string) (*Client, error) {
 		return nil, errors.New("subdominio da empresa obrigatorio")
 	}
 
-	baseURL := fmt.Sprintf("https://%s.sienge.com.br%s", subdomain, BasePath)
+	baseURL := fmt.Sprintf("https://api.sienge.com.br/%s%s", url.PathEscape(strings.Trim(subdomain, "/")), BasePath)
 	return NewClientWithBaseURL(baseURL, username, password, nil)
 }
 
@@ -143,16 +143,26 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body []byt
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(respBody) > maxErrorBody {
+			respBody = respBody[:maxErrorBody]
+		}
+		return nil, newAPIError(resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	if len(respBody) > maxErrorBody {
-		respBody = respBody[:maxErrorBody]
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, newAPIError(resp.StatusCode, respBody)
+	if isHTMLResponse(resp.Header, respBody) {
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    "Resposta inesperada do Sienge em formato HTML. Verifique a URL base da API, as credenciais e se este endpoint esta disponivel para a empresa.",
+		}
 	}
 
 	return &apiResponse{
@@ -160,6 +170,16 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body []byt
 		Header:     resp.Header.Clone(),
 		Body:       respBody,
 	}, nil
+}
+
+func isHTMLResponse(header http.Header, body []byte) bool {
+	contentType := strings.ToLower(header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/html") {
+		return true
+	}
+
+	trimmed := bytes.TrimSpace(body)
+	return len(trimmed) > 0 && trimmed[0] == '<'
 }
 
 func (c *Client) endpoint(path string) (string, error) {

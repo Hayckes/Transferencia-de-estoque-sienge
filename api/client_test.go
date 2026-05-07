@@ -18,7 +18,7 @@ func TestNewClientBuildsBaseURLAndTimeout(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	wantBaseURL := "https://minhaempresa.sienge.com.br/sienge/api/public/v1"
+	wantBaseURL := "https://api.sienge.com.br/minhaempresa/public/api/v1"
 	if client.BaseURL() != wantBaseURL {
 		t.Fatalf("BaseURL() = %q, want %q", client.BaseURL(), wantBaseURL)
 	}
@@ -55,8 +55,8 @@ func TestValidateCredentialsUsesBuildingsEndpointAndBasicAuth(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("method = %s, want GET", r.Method)
 		}
-		if r.URL.String() != "/sienge/api/public/v1/buildings?limit=1" {
-			t.Fatalf("URL = %s, want /sienge/api/public/v1/buildings?limit=1", r.URL.String())
+		if r.URL.String() != "/public/api/v1/buildings?limit=1" {
+			t.Fatalf("URL = %s, want /public/api/v1/buildings?limit=1", r.URL.String())
 		}
 
 		wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("usuario:senha"))
@@ -145,8 +145,8 @@ func TestPostJSONSendsJSONPayloadAndHeaders(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if r.URL.String() != "/sienge/api/public/v1/stock-transfers" {
-			t.Fatalf("URL = %s, want /sienge/api/public/v1/stock-transfers", r.URL.String())
+		if r.URL.String() != "/public/api/v1/stock-transfers" {
+			t.Fatalf("URL = %s, want /public/api/v1/stock-transfers", r.URL.String())
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("Content-Type = %q, want application/json", r.Header.Get("Content-Type"))
@@ -201,6 +201,27 @@ func TestPostJSONRejectsAbsoluteEndpoint(t *testing.T) {
 	_, err := client.PostJSON(context.Background(), "https://example.com/stock-transfers", map[string]any{})
 	if err == nil {
 		t.Fatal("PostJSON() error = nil, want error")
+	}
+}
+
+func TestDoResponseRejectsHTMLSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html>login</html>"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	err := client.ValidateCredentials(context.Background())
+	if err == nil {
+		t.Fatal("ValidateCredentials() error = nil, want HTML response error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ValidateCredentials() error type = %T, want *APIError", err)
+	}
+	if !strings.Contains(apiErr.Message, "formato HTML") {
+		t.Fatalf("Message = %q, want HTML format message", apiErr.Message)
 	}
 }
 

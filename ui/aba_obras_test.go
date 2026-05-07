@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -23,6 +24,13 @@ func TestNewObrasTabStateLoadsReadOnlyUserAndWorks(t *testing.T) {
 	state.Obras[0].Nome = "Alterada"
 	if cfg.Obras[0].Nome == "Alterada" {
 		t.Fatal("NewObrasTabState() should copy works slice")
+	}
+}
+
+func TestObrasTabStateDoesNotKeepManualWorkNameInput(t *testing.T) {
+	stateType := reflect.TypeOf(ObrasTabState{})
+	if _, ok := stateType.FieldByName("NovoNome"); ok {
+		t.Fatal("ObrasTabState should not keep a manual work name input")
 	}
 }
 
@@ -87,14 +95,69 @@ func TestAddObraPersistsAndUpdatesState(t *testing.T) {
 	}
 }
 
-func TestAddObraFromInputParsesNumericID(t *testing.T) {
-	state := NewAppState(testConfig())
+func TestSearchAndAddCostCenterFromInputAddsSingleExistingCenter(t *testing.T) {
+	store := &fakeConfigStore{}
+	service := &fakeCostCenterService{centers: []models.Obra{{ID: 333, Nome: "Nova Obra"}}}
+	state := NewAppStateWithStore(testConfig(), store)
+	state.CostCenters = service
 
-	if err := AddObraFromInput(state, "333", "Nova Obra"); err != nil {
-		t.Fatalf("AddObraFromInput() error = %v", err)
+	if err := SearchAndAddCostCenterFromInput(context.Background(), state, "333"); err != nil {
+		t.Fatalf("SearchAndAddCostCenterFromInput() error = %v", err)
 	}
-	if state.Config.Obras[2].ID != 333 {
-		t.Fatalf("new obra ID = %d, want 333", state.Config.Obras[2].ID)
+
+	if !service.called || service.costCenterID != 333 {
+		t.Fatalf("cost center service called/id = %v/%d, want true/333", service.called, service.costCenterID)
+	}
+	if !store.saved {
+		t.Fatal("config should be saved after adding center")
+	}
+	if state.Config.Obras[2] != (models.Obra{ID: 333, Nome: "Nova Obra"}) {
+		t.Fatalf("new obra = %#v, want cost center from Sienge", state.Config.Obras[2])
+	}
+	if state.Obras.NovoCentroCustoID != "" || len(state.Obras.CentrosCustoEncontrados) != 0 {
+		t.Fatalf("search state was not cleared: %#v", state.Obras)
+	}
+}
+
+func TestSearchAndAddCostCenterFromInputKeepsMultipleOptionsForSelection(t *testing.T) {
+	state := NewAppState(testConfig())
+	state.CostCenters = &fakeCostCenterService{centers: []models.Obra{{ID: 333, Nome: "Nova A"}, {ID: 334, Nome: "Nova B"}}}
+
+	err := SearchAndAddCostCenterFromInput(context.Background(), state, "333")
+	var multipleErr *MultipleCostCentersError
+	if !errors.As(err, &multipleErr) {
+		t.Fatalf("SearchAndAddCostCenterFromInput() error = %T, want MultipleCostCentersError", err)
+	}
+	if len(state.Config.Obras) != 2 {
+		t.Fatalf("config should not add automatically when there are multiple centers: %#v", state.Config.Obras)
+	}
+	if len(state.Obras.CentrosCustoEncontrados) != 2 {
+		t.Fatalf("CentrosCustoEncontrados = %#v, want 2 options", state.Obras.CentrosCustoEncontrados)
+	}
+
+	if err := AddSelectedCostCenterFromLabel(state, "334 - Nova B"); err != nil {
+		t.Fatalf("AddSelectedCostCenterFromLabel() error = %v", err)
+	}
+	if state.Config.Obras[2] != (models.Obra{ID: 334, Nome: "Nova B"}) {
+		t.Fatalf("selected obra = %#v, want Nova B", state.Config.Obras[2])
+	}
+}
+
+func TestSearchCostCentersFromInputRejectsInvalidCases(t *testing.T) {
+	state := NewAppState(testConfig())
+	if _, err := SearchCostCentersFromInput(context.Background(), state, "333"); err == nil {
+		t.Fatal("SearchCostCentersFromInput() error = nil, want missing service error")
+	}
+
+	state.CostCenters = &fakeCostCenterService{}
+	_, err := SearchCostCentersFromInput(context.Background(), state, "")
+	if err == nil || !strings.Contains(err.Error(), "centro de custo") {
+		t.Fatalf("SearchCostCentersFromInput() error = %v, want centro de custo validation", err)
+	}
+
+	_, err = SearchCostCentersFromInput(context.Background(), state, "333")
+	if !errors.Is(err, ErrCentroCustoNaoEncontrado) {
+		t.Fatalf("SearchCostCentersFromInput() error = %v, want ErrCentroCustoNaoEncontrado", err)
 	}
 }
 
@@ -207,4 +270,21 @@ func oneWorkConfig() models.Config {
 	cfg := testConfig()
 	cfg.Obras = cfg.Obras[:1]
 	return cfg
+}
+
+type fakeCostCenterService struct {
+	centers      []models.Obra
+	err          error
+	called       bool
+	costCenterID int
+}
+
+func (s *fakeCostCenterService) GetCostCenters(ctx context.Context, costCenterID int) ([]models.Obra, error) {
+	s.called = true
+	s.costCenterID = costCenterID
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return append([]models.Obra(nil), s.centers...), nil
 }

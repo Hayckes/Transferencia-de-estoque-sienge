@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"sienge-transfer/models"
@@ -16,7 +17,7 @@ func TestGetStockItemsCallsCurrentEndpointAndParsesItems(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("method = %s, want GET", r.Method)
 		}
-		if r.URL.String() != "/sienge/api/public/v1/stock-inventories/121/items" {
+		if r.URL.String() != "/public/api/v1/stock-inventories/121/items" {
 			t.Fatalf("URL = %s, want stock inventory items endpoint", r.URL.String())
 		}
 
@@ -109,6 +110,24 @@ func TestGetStockItemsByIDsFiltersLocally(t *testing.T) {
 	}
 }
 
+func TestGetStockItemsParsesSuccessfulResponseLargerThanErrorLimit(t *testing.T) {
+	largeName := strings.Repeat("Cimento", 700)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"resourceId":3421,"resourceName":"` + largeName + `","quantity":10}]}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	items, err := client.GetStockItems(context.Background(), 121)
+	if err != nil {
+		t.Fatalf("GetStockItems() error = %v", err)
+	}
+	if len(items) != 1 || items[0].Nome != largeName {
+		t.Fatalf("items = %#v, want untruncated large response", items)
+	}
+}
+
 func TestGetStockItemsByIDsRejectsInvalidIDs(t *testing.T) {
 	client := newTestClient(t, "https://example.com"+BasePath, nil)
 
@@ -129,7 +148,7 @@ func TestGetStockItemsRejectsInvalidCostCenter(t *testing.T) {
 
 func TestGetBuildingAppropriationsCallsEndpointAndParsesItems(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.String() != "/sienge/api/public/v1/stock-inventories/121/items/3421/building-appropriation" {
+		if r.URL.String() != "/public/api/v1/stock-inventories/121/items/3421/building-appropriation" {
 			t.Fatalf("URL = %s, want appropriation endpoint", r.URL.String())
 		}
 
@@ -152,6 +171,22 @@ func TestGetBuildingAppropriationsCallsEndpointAndParsesItems(t *testing.T) {
 		{Codigo: "A001", Descricao: "Fundacao", Quantidade: 40.5},
 		{Codigo: "A002", Descricao: "Estrutura", Quantidade: 15.5},
 	}
+	if !reflect.DeepEqual(appropriations, want) {
+		t.Fatalf("appropriations = %#v, want %#v", appropriations, want)
+	}
+}
+
+func TestParseAppropriationsSupportsSiengeStockFields(t *testing.T) {
+	appropriations, err := parseAppropriations([]byte(`{
+		"results": [
+			{"buildingUnitId": 3, "sheetItemId": 42, "costEstimationItemReference": "08.004.001", "quantity": 12.3456}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("parseAppropriations() error = %v", err)
+	}
+
+	want := []models.Apropriacao{{Codigo: "08.004.001", BuildingUnitID: 3, SheetItemID: 42, Quantidade: 12.3456}}
 	if !reflect.DeepEqual(appropriations, want) {
 		t.Fatalf("appropriations = %#v, want %#v", appropriations, want)
 	}

@@ -30,9 +30,11 @@ type Obra struct {
 }
 
 type Apropriacao struct {
-	Codigo     string  `json:"codigo"`
-	Descricao  string  `json:"descricao"`
-	Quantidade float64 `json:"quantidade"`
+	Codigo         string  `json:"codigo"`
+	Descricao      string  `json:"descricao"`
+	BuildingUnitID int     `json:"building_unit_id,omitempty"`
+	SheetItemID    int     `json:"sheet_item_id,omitempty"`
+	Quantidade     float64 `json:"quantidade"`
 }
 
 type Insumo struct {
@@ -52,6 +54,7 @@ type Transferencia struct {
 	Usuario             string            `json:"usuario"`
 	Cargo               string            `json:"cargo"`
 	Solicitante         string            `json:"solicitante"`
+	Observacao          string            `json:"observacao,omitempty"`
 	ObraOrigemID        int               `json:"obra_origem_id"`
 	ObraOrigemNome      string            `json:"obra_origem_nome"`
 	ObraDestinoID       int               `json:"obra_destino_id"`
@@ -68,6 +71,8 @@ type ItemTransferido struct {
 	Marca                string  `json:"marca"`
 	Apropriacao          string  `json:"apropriacao"`
 	ApropriacaoDescricao string  `json:"apropriacao_descricao,omitempty"`
+	ApropriacaoDestino   string  `json:"apropriacao_destino,omitempty"`
+	ApropriacaoDestinoDescricao string `json:"apropriacao_destino_descricao,omitempty"`
 	Quantidade           float64 `json:"quantidade"`
 	QuantidadeDisponivel float64 `json:"quantidade_disponivel,omitempty"`
 }

@@ -27,6 +27,16 @@ func TestObraLabelsAndIDFromLabel(t *testing.T) {
 	}
 }
 
+func TestConsultaTabStateDoesNotKeepObservationField(t *testing.T) {
+	stateType := reflect.TypeOf(ConsultaTabState{})
+	if _, ok := stateType.FieldByName("Observacao"); ok {
+		t.Fatal("ConsultaTabState should not keep an observation field")
+	}
+	if _, ok := stateType.FieldByName("DetalheAberto"); ok {
+		t.Fatal("ConsultaTabState should not keep a details modal state")
+	}
+}
+
 func TestValidateConsultaInput(t *testing.T) {
 	state := NewAppState(testConfig())
 	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
@@ -62,7 +72,7 @@ func TestValidateConsultaInputRejectsMissingWorkAndIDs(t *testing.T) {
 	}
 }
 
-func TestRunConsultaCallsStockServiceAndPreservesObservation(t *testing.T) {
+func TestRunConsultaCallsStockService(t *testing.T) {
 	stock := &fakeStockService{items: []models.Insumo{
 		{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Quantidade: 150, Unidade: "SC"},
 		{ID: 3421, Nome: "Cimento", Detalhe: "CP II", Marca: "Intercement", Quantidade: 80, Unidade: "SC"},
@@ -71,7 +81,6 @@ func TestRunConsultaCallsStockServiceAndPreservesObservation(t *testing.T) {
 	state.Stock = stock
 	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
 	state.Consulta.InsumoIDsInput = "3421"
-	state.Consulta.Observacao = "observacao local"
 
 	if err := RunConsulta(context.Background(), state); err != nil {
 		t.Fatalf("RunConsulta() error = %v", err)
@@ -88,9 +97,6 @@ func TestRunConsultaCallsStockServiceAndPreservesObservation(t *testing.T) {
 	}
 	if len(state.Consulta.Resultados) != 2 {
 		t.Fatalf("len(Resultados) = %d, want 2", len(state.Consulta.Resultados))
-	}
-	if state.Consulta.Observacao != "observacao local" {
-		t.Fatalf("Observacao = %q, want preserved", state.Consulta.Observacao)
 	}
 }
 
@@ -126,51 +132,15 @@ func TestRunConsultaReturnsServiceErrorWithoutClearingPreviousResults(t *testing
 	}
 }
 
-func TestLoadConsultaDetalheLoadsAppropriations(t *testing.T) {
-	state := NewAppState(testConfig())
-	state.Stock = &fakeStockService{appropriations: []models.Apropriacao{
-		{Codigo: "A001", Descricao: "Fundacao", Quantidade: 40},
-		{Codigo: "A002", Descricao: "Estrutura", Quantidade: 15.5},
-	}}
-	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
-	state.Consulta.Resultados = []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC"}}
-
-	item, err := LoadConsultaDetalhe(context.Background(), state, 0)
-	if err != nil {
-		t.Fatalf("LoadConsultaDetalhe() error = %v", err)
-	}
-	if len(item.Apropriacoes) != 2 {
-		t.Fatalf("len(Apropriacoes) = %d, want 2", len(item.Apropriacoes))
-	}
-	if state.Consulta.DetalheAberto == nil || state.Consulta.DetalheAberto.ID != 3421 {
-		t.Fatalf("DetalheAberto = %#v, want selected item", state.Consulta.DetalheAberto)
-	}
-	if len(state.Consulta.Resultados[0].Apropriacoes) != 2 {
-		t.Fatalf("state result appropriations not updated: %#v", state.Consulta.Resultados[0])
-	}
-}
-
-func TestLoadConsultaDetalheRejectsInvalidIndex(t *testing.T) {
-	state := NewAppState(testConfig())
-	state.Stock = &fakeStockService{}
-	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
-
-	_, err := LoadConsultaDetalhe(context.Background(), state, 0)
-	if err == nil {
-		t.Fatal("LoadConsultaDetalhe() error = nil, want error")
-	}
-}
-
 func TestClearConsultaResetsOnlyConsultaState(t *testing.T) {
 	state := NewAppState(testConfig())
 	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
 	state.Consulta.InsumoIDsInput = "3421"
-	state.Consulta.Observacao = "obs"
 	state.Consulta.Resultados = []models.Insumo{{ID: 3421}}
 
 	ClearConsulta(state)
 
-	if state.Consulta.ObraSelecionada != "" || state.Consulta.InsumoIDsInput != "" || state.Consulta.Observacao != "" || len(state.Consulta.Resultados) != 0 {
+	if state.Consulta.ObraSelecionada != "" || state.Consulta.InsumoIDsInput != "" || len(state.Consulta.Resultados) != 0 {
 		t.Fatalf("Consulta was not cleared: %#v", state.Consulta)
 	}
 	if state.Config.Usuario.Nome == "" {
@@ -178,7 +148,7 @@ func TestClearConsultaResetsOnlyConsultaState(t *testing.T) {
 	}
 }
 
-func TestConsultaResultRowAndAppropriationDetailsText(t *testing.T) {
+func TestConsultaResultRow(t *testing.T) {
 	item := models.Insumo{
 		ID:         3421,
 		Nome:       "Cimento",
@@ -192,16 +162,9 @@ func TestConsultaResultRowAndAppropriationDetailsText(t *testing.T) {
 	}
 
 	row := ConsultaResultRow(item)
-	for _, want := range []string{"3421", "Cimento", "CP III", "Votorantim", "150 SC"} {
+	for _, want := range []string{"3421", "Cimento", "CP III", "Votorantim", "150.0000 SC"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("ConsultaResultRow() = %q, want containing %q", row, want)
-		}
-	}
-
-	details := BuildAppropriationDetailsText(item)
-	for _, want := range []string{"Cimento", "A001", "Fundacao", "40 SC"} {
-		if !strings.Contains(details, want) {
-			t.Fatalf("BuildAppropriationDetailsText() = %q, want containing %q", details, want)
 		}
 	}
 }
@@ -214,14 +177,16 @@ func TestBuildConsultaTabReturnsObject(t *testing.T) {
 }
 
 type fakeStockService struct {
-	items          []models.Insumo
-	appropriations []models.Apropriacao
-	err            error
-	itemsCalled    bool
-	approprCalled  bool
-	costCenterID   int
-	resourceID     int
-	ids            []int
+	items                      []models.Insumo
+	appropriations             []models.Apropriacao
+	appropriationsByCostCenter map[int][]models.Apropriacao
+	err                        error
+	itemsCalled                bool
+	approprCalled              bool
+	costCenterID               int
+	approprCostCenterIDs       []int
+	resourceID                 int
+	ids                        []int
 }
 
 func (s *fakeStockService) GetStockItemsByIDs(ctx context.Context, costCenterID int, ids []int) ([]models.Insumo, error) {
@@ -238,9 +203,13 @@ func (s *fakeStockService) GetStockItemsByIDs(ctx context.Context, costCenterID 
 func (s *fakeStockService) GetBuildingAppropriations(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error) {
 	s.approprCalled = true
 	s.costCenterID = costCenterID
+	s.approprCostCenterIDs = append(s.approprCostCenterIDs, costCenterID)
 	s.resourceID = resourceID
 	if s.err != nil {
 		return nil, s.err
+	}
+	if s.appropriationsByCostCenter != nil {
+		return append([]models.Apropriacao(nil), s.appropriationsByCostCenter[costCenterID]...), nil
 	}
 
 	return append([]models.Apropriacao(nil), s.appropriations...), nil

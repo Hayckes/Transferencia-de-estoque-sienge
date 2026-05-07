@@ -16,9 +16,7 @@ import (
 type ConsultaTabState struct {
 	ObraSelecionada string
 	InsumoIDsInput  string
-	Observacao      string
 	Resultados      []models.Insumo
-	DetalheAberto   *models.Insumo
 }
 
 var ErrObraConsultaObrigatoria = errors.New("selecione uma obra para consultar")
@@ -41,13 +39,6 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		state.Consulta.InsumoIDsInput = value
 	}
 
-	observacao := widget.NewMultiLineEntry()
-	observacao.SetPlaceHolder("Observacao local da consulta")
-	observacao.SetText(state.Consulta.Observacao)
-	observacao.OnChanged = func(value string) {
-		state.Consulta.Observacao = value
-	}
-
 	status := widget.NewLabel("")
 	consultar := widget.NewButton("Consultar", func() {
 		status.SetText(StatusLoading)
@@ -62,43 +53,27 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 				return
 			}
 			status.SetText(fmt.Sprintf("Consulta concluida. %d item(ns) encontrado(s).", len(state.Consulta.Resultados)))
-			state.Refresh()
+			state.RefreshTab(TabConsulta)
 		})
 	})
 
 	resultRows := make([]fyne.CanvasObject, 0, len(state.Consulta.Resultados)+1)
 	resultRows = append(resultRows, widget.NewLabel("ID | Nome | Detalhe | Marca | Qtd. em Estoque"))
-	for index, item := range state.Consulta.Resultados {
-		rowIndex := index
-		label := widget.NewLabel(ConsultaResultRow(item))
-		detalhes := widget.NewButton("Detalhes", func() {
-			item, err := LoadConsultaDetalhe(context.Background(), state, rowIndex)
-			if err != nil {
-				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
-					return
-				}
-				status.SetText(err.Error())
-				return
-			}
-			ShowInsumoDetailsModal(state.Window, item)
-			status.SetText("Detalhes carregados.")
-		})
-		resultRows = append(resultRows, container.NewHBox(label, detalhes))
+	for _, item := range state.Consulta.Resultados {
+		resultRows = append(resultRows, widget.NewLabel(ConsultaResultRow(item)))
 	}
 
 	limpar := widget.NewButton("Limpar", func() {
 		ClearConsulta(state)
 		obraSelect.ClearSelected()
 		idsEntry.SetText("")
-		observacao.SetText("")
 		status.SetText("Consulta limpa.")
-		state.Refresh()
+		state.RefreshTab(TabConsulta)
 	})
 
 	return container.NewVBox(
 		widget.NewLabel("Consulta de estoque"),
-		container.NewHBox(obraSelect, idsEntry, consultar, limpar),
-		observacao,
+		container.NewHBox(obraSelect, withMinTypingInputWidth(idsEntry), consultar, limpar),
 		status,
 		container.NewVBox(resultRows...),
 	)
@@ -134,33 +109,7 @@ func RunConsulta(ctx context.Context, state *AppState) error {
 	}
 
 	state.Consulta.Resultados = append([]models.Insumo(nil), items...)
-	state.Consulta.DetalheAberto = nil
 	return nil
-}
-
-func LoadConsultaDetalhe(ctx context.Context, state *AppState, resultIndex int) (models.Insumo, error) {
-	if state.Stock == nil {
-		return models.Insumo{}, errors.New("servico de estoque nao configurado")
-	}
-	if resultIndex < 0 || resultIndex >= len(state.Consulta.Resultados) {
-		return models.Insumo{}, errors.New("insumo selecionado nao encontrado")
-	}
-
-	obraID, ok := ObraIDFromLabel(state.Config.Obras, state.Consulta.ObraSelecionada)
-	if !ok {
-		return models.Insumo{}, ErrObraConsultaObrigatoria
-	}
-
-	item := state.Consulta.Resultados[resultIndex]
-	appropriations, err := state.Stock.GetBuildingAppropriations(ctx, obraID, item.ID)
-	if err != nil {
-		return models.Insumo{}, err
-	}
-
-	item.Apropriacoes = append([]models.Apropriacao(nil), appropriations...)
-	state.Consulta.Resultados[resultIndex] = item
-	state.Consulta.DetalheAberto = &item
-	return item, nil
 }
 
 func ClearConsulta(state *AppState) {
@@ -177,26 +126,25 @@ func ObraLabels(obras []models.Obra) []string {
 }
 
 func ObraIDFromLabel(obras []models.Obra, label string) (int, bool) {
+	obra, ok := ObraFromLabel(obras, label)
+	if !ok {
+		return 0, false
+	}
+
+	return obra.ID, true
+}
+
+func ObraFromLabel(obras []models.Obra, label string) (models.Obra, bool) {
 	label = strings.TrimSpace(label)
 	for _, obra := range obras {
 		if obra.Label() == label {
-			return obra.ID, true
+			return obra, true
 		}
 	}
 
-	return 0, false
+	return models.Obra{}, false
 }
 
 func ConsultaResultRow(item models.Insumo) string {
 	return fmt.Sprintf("%d | %s | %s | %s | %s", item.ID, item.Nome, item.Detalhe, item.Marca, models.FormatQuantidade(item.Quantidade, item.Unidade))
-}
-
-func BuildAppropriationDetailsText(item models.Insumo) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("%s %s - %s", item.Nome, item.Detalhe, item.Marca))
-	for _, appropriation := range item.Apropriacoes {
-		builder.WriteString(fmt.Sprintf("\n%s | %s | %s", appropriation.Codigo, appropriation.Descricao, models.FormatQuantidade(appropriation.Quantidade, item.Unidade)))
-	}
-
-	return builder.String()
 }

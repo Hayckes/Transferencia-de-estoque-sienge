@@ -31,16 +31,20 @@ func (e *MultipleInsumosError) Error() string {
 }
 
 type TransferenciaItemState struct {
-	Insumo                 models.Insumo
-	ApropriacaoSelecionada string
-	QuantidadeDisponivel   float64
-	QuantidadeTransferir   string
+	Insumo                         models.Insumo
+	ApropriacoesOrigem             []models.Apropriacao
+	ApropriacoesDestino            []models.Apropriacao
+	ApropriacaoOrigemSelecionada   string
+	ApropriacaoDestinoSelecionada  string
+	QuantidadeDisponivel           float64
+	QuantidadeTransferir           string
 }
 
 type TransferenciaTabState struct {
 	ObraOrigem      string
 	ObraDestino     string
 	Solicitante     string
+	Observacao      string
 	CodigoDocumento string
 	CodigoMovimento string
 	InsumoIDInput   string
@@ -77,13 +81,26 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	movimentoEntry.SetText(state.Transferencia.CodigoMovimento)
 	movimentoEntry.OnChanged = func(value string) { state.Transferencia.CodigoMovimento = value }
 
+	observacaoEntry := widget.NewMultiLineEntry()
+	observacaoEntry.SetPlaceHolder("Observacao da transferencia")
+	observacaoEntry.SetText(state.Transferencia.Observacao)
+	observacaoEntry.OnChanged = func(value string) { state.Transferencia.Observacao = value }
+
 	insumoEntry := widget.NewEntry()
 	insumoEntry.SetPlaceHolder("ID do insumo")
 	insumoEntry.SetText(state.Transferencia.InsumoIDInput)
-	insumoEntry.OnChanged = func(value string) { state.Transferencia.InsumoIDInput = onlyDigits(value) }
+	insumoEntry.OnChanged = func(value string) {
+		filtered := onlyDigits(value)
+		if filtered != value {
+			insumoEntry.SetText(filtered)
+			return
+		}
+		state.Transferencia.InsumoIDInput = filtered
+	}
 
 	status := widget.NewLabel("")
 	addButton := widget.NewButton("Adicionar Insumo", func() {
+		state.ActiveTab = TabTransferencia
 		status.SetText(StatusLoading)
 		state.Runner.Run(func() error {
 			return AddTransferInsumoFromInput(context.Background(), state, state.Transferencia.InsumoIDInput)
@@ -100,7 +117,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 								return
 							}
 							status.SetText("Insumo adicionado.")
-							state.Refresh()
+							state.RefreshTab(TabTransferencia)
 						})
 					})
 					status.SetText(err.Error())
@@ -114,11 +131,12 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 			}
 			insumoEntry.SetText("")
 			status.SetText("Insumo adicionado.")
-			state.Refresh()
+			state.RefreshTab(TabTransferencia)
 		})
 	})
 
 	sendButton := widget.NewButton("Enviar Transferencia", func() {
+		state.ActiveTab = TabTransferencia
 		transfer, err := BuildTransferenciaFromState(state)
 		if err != nil {
 			status.SetText(err.Error())
@@ -138,20 +156,25 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 					return
 				}
 				status.SetText("Transferencia enviada com sucesso.")
-				state.Refresh()
+				state.RefreshTab(TabTransferencia)
 			})
 		})
 	})
 
 	rows := make([]fyne.CanvasObject, 0, len(state.Transferencia.Itens)+1)
-	rows = append(rows, widget.NewLabel("ID | Nome/Detalhe/Marca | Apropriacao | Disponivel | Transferir"))
+	rows = append(rows, widget.NewLabel("ID | Nome/Detalhe/Marca | Aprop. Origem | Aprop. Destino | Disponivel | Transferir"))
 	for index, item := range state.Transferencia.Itens {
 		rowIndex := index
-		appropriationLabels := AppropriationLabels(item.Insumo.Apropriacoes)
-		appropriationSelect := widget.NewSelect(appropriationLabels, func(value string) {
-			_ = SetTransferItemAppropriation(state, rowIndex, value)
+		originAppropriationSelect := widget.NewSelect(AppropriationLabels(item.ApropriacoesOrigem), func(value string) {
+			_ = SetTransferItemOriginAppropriation(state, rowIndex, value)
 		})
-		appropriationSelect.SetSelected(item.ApropriacaoSelecionada)
+		originAppropriationSelect.PlaceHolder = "Apropriacao origem"
+		originAppropriationSelect.SetSelected(item.ApropriacaoOrigemSelecionada)
+		destinationAppropriationSelect := widget.NewSelect(AppropriationLabels(item.ApropriacoesDestino), func(value string) {
+			_ = SetTransferItemDestinationAppropriation(state, rowIndex, value)
+		})
+		destinationAppropriationSelect.PlaceHolder = "Apropriacao destino"
+		destinationAppropriationSelect.SetSelected(item.ApropriacaoDestinoSelecionada)
 		quantityEntry := widget.NewEntry()
 		quantityEntry.SetPlaceHolder("Qtd.")
 		quantityEntry.SetText(item.QuantidadeTransferir)
@@ -161,13 +184,14 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		removeButton := widget.NewButton("Remover", func() {
 			_ = RemoveTransferItem(state, rowIndex)
 			status.SetText("Insumo removido.")
-			state.Refresh()
+			state.RefreshTab(TabTransferencia)
 		})
 		rows = append(rows, container.NewHBox(
 			widget.NewLabel(TransferItemLabel(item.Insumo)),
-			appropriationSelect,
+			originAppropriationSelect,
+			destinationAppropriationSelect,
 			widget.NewLabel(models.FormatQuantidade(item.QuantidadeDisponivel, item.Insumo.Unidade)),
-			quantityEntry,
+			withMinTypingInputWidth(quantityEntry),
 			removeButton,
 		))
 	}
@@ -177,17 +201,19 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		origemSelect.ClearSelected()
 		destinoSelect.ClearSelected()
 		solicitanteEntry.SetText("")
+		observacaoEntry.SetText("")
 		movimentoEntry.SetText("3")
 		insumoEntry.SetText("")
 		status.SetText("Transferencia limpa.")
-		state.Refresh()
+		state.RefreshTab(TabTransferencia)
 	})
 
 	return container.NewVBox(
 		widget.NewLabel("Transferencia de insumos"),
 		container.NewHBox(origemSelect, destinoSelect),
-		container.NewHBox(solicitanteEntry, widget.NewLabel("Documento: TR"), movimentoEntry),
-		container.NewHBox(insumoEntry, addButton, sendButton, clearButton),
+		container.NewHBox(withMinTypingInputWidth(solicitanteEntry), widget.NewLabel("Documento: TR"), withMinTypingInputWidth(movimentoEntry)),
+		withMinTypingInputWidth(observacaoEntry),
+		container.NewHBox(withMinTypingInputWidth(insumoEntry), addButton, sendButton, clearButton),
 		status,
 		container.NewVBox(rows...),
 	)
@@ -208,6 +234,9 @@ func AddTransferInsumo(ctx context.Context, state *AppState, supplyID int) error
 	}
 	originID, err := TransferOriginID(state)
 	if err != nil {
+		return err
+	}
+	if _, err := TransferDestinationID(state); err != nil {
 		return err
 	}
 
@@ -233,31 +262,89 @@ func AddSelectedTransferInsumo(ctx context.Context, state *AppState, item models
 	if err != nil {
 		return err
 	}
+	destinationID, err := TransferDestinationID(state)
+	if err != nil {
+		return err
+	}
 
 	appropriations, err := state.Stock.GetBuildingAppropriations(ctx, originID, item.ID)
 	if err != nil {
 		return err
 	}
-	item.Apropriacoes = append([]models.Apropriacao(nil), appropriations...)
-	state.Transferencia.Itens = append(state.Transferencia.Itens, TransferenciaItemState{Insumo: item})
+	destinationAppropriations, err := state.Stock.GetBuildingAppropriations(ctx, destinationID, item.ID)
+	if err != nil {
+		return err
+	}
+	originAppropriations := AppropriationsWithStock(appropriations)
+	destinationAppropriations = AppropriationsWithStock(destinationAppropriations)
+	item.Apropriacoes = append([]models.Apropriacao(nil), originAppropriations...)
+	state.Transferencia.Itens = append(state.Transferencia.Itens, NewTransferenciaItemState(item, originAppropriations, destinationAppropriations))
 	state.Transferencia.InsumoIDInput = ""
 	return nil
 }
 
+func NewTransferenciaItemState(item models.Insumo, originAppropriations, destinationAppropriations []models.Apropriacao) TransferenciaItemState {
+	itemState := TransferenciaItemState{
+		Insumo:              item,
+		ApropriacoesOrigem:  append([]models.Apropriacao(nil), originAppropriations...),
+		ApropriacoesDestino: append([]models.Apropriacao(nil), destinationAppropriations...),
+	}
+	if len(itemState.ApropriacoesOrigem) == 1 {
+		appropriation := itemState.ApropriacoesOrigem[0]
+		itemState.ApropriacaoOrigemSelecionada = AppropriationLabel(appropriation)
+		itemState.QuantidadeDisponivel = appropriation.Quantidade
+	}
+	if len(itemState.ApropriacoesDestino) == 1 {
+		itemState.ApropriacaoDestinoSelecionada = AppropriationLabel(itemState.ApropriacoesDestino[0])
+	}
+
+	return itemState
+}
+
+func AppropriationsWithStock(appropriations []models.Apropriacao) []models.Apropriacao {
+	filtered := make([]models.Apropriacao, 0, len(appropriations))
+	for _, appropriation := range appropriations {
+		if appropriation.Quantidade > 0 {
+			filtered = append(filtered, appropriation)
+		}
+	}
+
+	return filtered
+}
+
 func SetTransferItemAppropriation(state *AppState, index int, code string) error {
+	return SetTransferItemOriginAppropriation(state, index, code)
+}
+
+func SetTransferItemOriginAppropriation(state *AppState, index int, code string) error {
 	if index < 0 || index >= len(state.Transferencia.Itens) {
 		return errors.New("insumo da transferencia nao encontrado")
 	}
 	code = strings.TrimSpace(code)
-	for _, appropriation := range state.Transferencia.Itens[index].Insumo.Apropriacoes {
+	for _, appropriation := range state.Transferencia.Itens[index].ApropriacoesOrigem {
 		if AppropriationLabel(appropriation) == code || appropriation.Codigo == code {
-			state.Transferencia.Itens[index].ApropriacaoSelecionada = AppropriationLabel(appropriation)
+			state.Transferencia.Itens[index].ApropriacaoOrigemSelecionada = AppropriationLabel(appropriation)
 			state.Transferencia.Itens[index].QuantidadeDisponivel = appropriation.Quantidade
 			return nil
 		}
 	}
 
-	return errors.New("apropriacao selecionada nao encontrada")
+	return errors.New("apropriacao de origem selecionada nao encontrada")
+}
+
+func SetTransferItemDestinationAppropriation(state *AppState, index int, code string) error {
+	if index < 0 || index >= len(state.Transferencia.Itens) {
+		return errors.New("insumo da transferencia nao encontrado")
+	}
+	code = strings.TrimSpace(code)
+	for _, appropriation := range state.Transferencia.Itens[index].ApropriacoesDestino {
+		if AppropriationLabel(appropriation) == code || appropriation.Codigo == code {
+			state.Transferencia.Itens[index].ApropriacaoDestinoSelecionada = AppropriationLabel(appropriation)
+			return nil
+		}
+	}
+
+	return errors.New("apropriacao de destino selecionada nao encontrada")
 }
 
 func RemoveTransferItem(state *AppState, index int) error {
@@ -292,16 +379,19 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 		if err != nil {
 			return models.Transferencia{}, fmt.Errorf("insumo %d: %w", index+1, err)
 		}
-		appropriationCode, appropriationDescription := SplitAppropriationLabel(item.ApropriacaoSelecionada)
+		originAppropriationCode, originAppropriationDescription := SplitAppropriationLabel(item.ApropriacaoOrigemSelecionada)
+		destinationAppropriationCode, destinationAppropriationDescription := SplitAppropriationLabel(item.ApropriacaoDestinoSelecionada)
 		items = append(items, models.ItemTransferido{
-			ID:                   item.Insumo.ID,
-			Nome:                 item.Insumo.Nome,
-			Detalhe:              item.Insumo.Detalhe,
-			Marca:                item.Insumo.Marca,
-			Apropriacao:          appropriationCode,
-			ApropriacaoDescricao: appropriationDescription,
-			Quantidade:           quantity,
-			QuantidadeDisponivel: item.QuantidadeDisponivel,
+			ID:                            item.Insumo.ID,
+			Nome:                          item.Insumo.Nome,
+			Detalhe:                       item.Insumo.Detalhe,
+			Marca:                         item.Insumo.Marca,
+			Apropriacao:                   originAppropriationCode,
+			ApropriacaoDescricao:          originAppropriationDescription,
+			ApropriacaoDestino:            destinationAppropriationCode,
+			ApropriacaoDestinoDescricao:   destinationAppropriationDescription,
+			Quantidade:                    quantity,
+			QuantidadeDisponivel:          item.QuantidadeDisponivel,
 		})
 	}
 
@@ -310,6 +400,7 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 		Usuario:             state.Config.Usuario.Nome,
 		Cargo:               state.Config.Usuario.Cargo,
 		Solicitante:         strings.TrimSpace(state.Transferencia.Solicitante),
+		Observacao:          strings.TrimSpace(state.Transferencia.Observacao),
 		ObraOrigemID:        originID,
 		ObraOrigemNome:      ObraNameByID(state.Config.Obras, originID),
 		ObraDestinoID:       destinationID,
@@ -345,7 +436,10 @@ func ValidateTransferenciaRequiredFields(transfer models.Transferencia) []string
 	for index, item := range transfer.Insumos {
 		prefix := fmt.Sprintf("insumo %d", index+1)
 		if strings.TrimSpace(item.Apropriacao) == "" {
-			validationErrors = append(validationErrors, prefix+": apropriacao obrigatoria")
+			validationErrors = append(validationErrors, prefix+": apropriacao de origem obrigatoria")
+		}
+		if strings.TrimSpace(item.ApropriacaoDestino) == "" {
+			validationErrors = append(validationErrors, prefix+": apropriacao de destino obrigatoria")
 		}
 		if item.Quantidade <= 0 {
 			validationErrors = append(validationErrors, prefix+": quantidade deve ser maior que zero")
@@ -412,16 +506,32 @@ func ClearTransferencia(state *AppState) {
 }
 
 func ParseQuantidadeTransferir(input string) (float64, error) {
-	input = strings.ReplaceAll(strings.TrimSpace(input), ",", ".")
+	input = strings.TrimSpace(input)
 	if input == "" {
 		return 0, errors.New("quantidade obrigatoria")
 	}
+	if decimalPlaces(input) > 4 {
+		return 0, errors.New("quantidade deve ter no maximo 4 casas decimais")
+	}
+	input = strings.ReplaceAll(input, ",", ".")
 	quantity, err := strconv.ParseFloat(input, 64)
 	if err != nil || quantity <= 0 {
 		return 0, errors.New("quantidade deve ser numerica positiva")
 	}
 
 	return quantity, nil
+}
+
+func decimalPlaces(input string) int {
+	separator := strings.LastIndex(input, ".")
+	if comma := strings.LastIndex(input, ","); comma > separator {
+		separator = comma
+	}
+	if separator == -1 {
+		return 0
+	}
+
+	return len(input) - separator - 1
 }
 
 func TransferItemLabel(item models.Insumo) string {

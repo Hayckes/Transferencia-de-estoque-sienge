@@ -110,10 +110,18 @@ func parseAppropriations(body []byte) ([]models.Apropriacao, error) {
 	appropriations := make([]models.Apropriacao, 0, len(objects))
 	for _, object := range objects {
 		quantity, _ := getFloat(object, "quantity", "availableQuantity", "balance", "stockQuantity")
+		buildingUnitID, _ := getInt(object, "buildingUnitId", "buildingUnitID", "unitId")
+		sheetItemID, _ := getInt(object, "sheetItemId", "sheetItemID", "itemId")
+		code := getString(object, "appropriationCode", "buildingAppropriationCode", "costEstimationItemReference", "code", "id")
+		if code == "" && sheetItemID > 0 {
+			code = strconv.Itoa(sheetItemID)
+		}
 		appropriations = append(appropriations, models.Apropriacao{
-			Codigo:     getString(object, "appropriationCode", "buildingAppropriationCode", "code", "id"),
-			Descricao:  getString(object, "appropriationDescription", "buildingAppropriationDescription", "description", "name"),
-			Quantidade: quantity,
+			Codigo:         code,
+			Descricao:      getString(object, "appropriationDescription", "buildingAppropriationDescription", "description", "name"),
+			BuildingUnitID: buildingUnitID,
+			SheetItemID:    sheetItemID,
+			Quantidade:     quantity,
 		})
 	}
 
