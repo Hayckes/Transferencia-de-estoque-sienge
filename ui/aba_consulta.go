@@ -17,6 +17,7 @@ type ConsultaTabState struct {
 	ObraSelecionada string
 	InsumoIDsInput  string
 	Resultados      []models.Insumo
+	DetalheAberto   *models.Insumo
 }
 
 var ErrObraConsultaObrigatoria = errors.New("selecione uma obra para consultar")
@@ -59,8 +60,30 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 
 	resultRows := make([]fyne.CanvasObject, 0, len(state.Consulta.Resultados)+1)
 	resultRows = append(resultRows, widget.NewLabel("ID | Nome | Detalhe | Marca | Qtd. em Estoque"))
-	for _, item := range state.Consulta.Resultados {
-		resultRows = append(resultRows, widget.NewLabel(ConsultaResultRow(item)))
+	for index, item := range state.Consulta.Resultados {
+		rowIndex := index
+		resultRows = append(resultRows, container.NewHBox(
+			widget.NewLabel(ConsultaResultRow(item)),
+			widget.NewButton("Detalhes", func() {
+				status.SetText(StatusLoading)
+				state.Runner.Run(func() error {
+					_, err := LoadConsultaDetalhe(context.Background(), state, rowIndex)
+					return err
+				}, func(err error) {
+					if err != nil {
+						if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+							return
+						}
+						status.SetText(err.Error())
+						return
+					}
+					if state.Consulta.DetalheAberto != nil {
+						ShowInsumoDetailsModal(state.Window, *state.Consulta.DetalheAberto)
+						status.SetText("Detalhes carregados.")
+					}
+				})
+			}),
+		))
 	}
 
 	limpar := widget.NewButton("Limpar", func() {
@@ -73,7 +96,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 
 	return container.NewVBox(
 		widget.NewLabel("Consulta de estoque"),
-		container.NewHBox(obraSelect, withMinTypingInputWidth(idsEntry), consultar, limpar),
+		container.NewHBox(withMinTypingInputWidth(obraSelect), withMinTypingInputWidth(idsEntry), consultar, limpar),
 		status,
 		container.NewVBox(resultRows...),
 	)
@@ -109,7 +132,30 @@ func RunConsulta(ctx context.Context, state *AppState) error {
 	}
 
 	state.Consulta.Resultados = append([]models.Insumo(nil), items...)
+	state.Consulta.DetalheAberto = nil
 	return nil
+}
+
+func LoadConsultaDetalhe(ctx context.Context, state *AppState, resultIndex int) (models.Insumo, error) {
+	if state.Stock == nil {
+		return models.Insumo{}, errors.New("servico de estoque nao configurado")
+	}
+	if resultIndex < 0 || resultIndex >= len(state.Consulta.Resultados) {
+		return models.Insumo{}, errors.New("insumo selecionado nao encontrado")
+	}
+	obraID, ok := ObraIDFromLabel(state.Config.Obras, state.Consulta.ObraSelecionada)
+	if !ok {
+		return models.Insumo{}, ErrObraConsultaObrigatoria
+	}
+	item := state.Consulta.Resultados[resultIndex]
+	appropriations, err := state.Stock.GetBuildingAppropriations(ctx, obraID, item.ID)
+	if err != nil {
+		return models.Insumo{}, err
+	}
+	item.Apropriacoes = append([]models.Apropriacao(nil), appropriations...)
+	state.Consulta.Resultados[resultIndex] = item
+	state.Consulta.DetalheAberto = &item
+	return item, nil
 }
 
 func ClearConsulta(state *AppState) {

@@ -31,13 +31,33 @@ func (e *MultipleInsumosError) Error() string {
 }
 
 type TransferenciaItemState struct {
-	Insumo                         models.Insumo
-	ApropriacoesOrigem             []models.Apropriacao
-	ApropriacoesDestino            []models.Apropriacao
-	ApropriacaoOrigemSelecionada   string
-	ApropriacaoDestinoSelecionada  string
-	QuantidadeDisponivel           float64
-	QuantidadeTransferir           string
+	Insumo                        models.Insumo
+	ApropriacoesOrigem            []models.Apropriacao
+	ApropriacoesDestino           []models.Apropriacao
+	ApropriacaoOrigemSelecionada  string
+	ApropriacaoDestinoSelecionada string
+	QuantidadeDisponivel          float64
+	QuantidadeTransferir          string
+}
+
+func (item TransferenciaItemState) selectedOriginAppropriation() models.Apropriacao {
+	for _, appropriation := range item.ApropriacoesOrigem {
+		if AppropriationLabel(appropriation) == item.ApropriacaoOrigemSelecionada || appropriation.Codigo == item.ApropriacaoOrigemSelecionada {
+			return appropriation
+		}
+	}
+
+	return models.Apropriacao{}
+}
+
+func (item TransferenciaItemState) selectedDestinationAppropriation() models.Apropriacao {
+	for _, appropriation := range item.ApropriacoesDestino {
+		if AppropriationLabel(appropriation) == item.ApropriacaoDestinoSelecionada || appropriation.Codigo == item.ApropriacaoDestinoSelecionada {
+			return appropriation
+		}
+	}
+
+	return models.Apropriacao{}
 }
 
 type TransferenciaTabState struct {
@@ -166,12 +186,16 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	for index, item := range state.Transferencia.Itens {
 		rowIndex := index
 		originAppropriationSelect := widget.NewSelect(AppropriationLabels(item.ApropriacoesOrigem), func(value string) {
-			_ = SetTransferItemOriginAppropriation(state, rowIndex, value)
+			if err := SetTransferItemOriginAppropriation(state, rowIndex, value); err == nil {
+				state.RefreshTab(TabTransferencia)
+			}
 		})
 		originAppropriationSelect.PlaceHolder = "Apropriacao origem"
 		originAppropriationSelect.SetSelected(item.ApropriacaoOrigemSelecionada)
 		destinationAppropriationSelect := widget.NewSelect(AppropriationLabels(item.ApropriacoesDestino), func(value string) {
-			_ = SetTransferItemDestinationAppropriation(state, rowIndex, value)
+			if err := SetTransferItemDestinationAppropriation(state, rowIndex, value); err == nil {
+				state.RefreshTab(TabTransferencia)
+			}
 		})
 		destinationAppropriationSelect.PlaceHolder = "Apropriacao destino"
 		destinationAppropriationSelect.SetSelected(item.ApropriacaoDestinoSelecionada)
@@ -210,7 +234,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 
 	return container.NewVBox(
 		widget.NewLabel("Transferencia de insumos"),
-		container.NewHBox(origemSelect, destinoSelect),
+		container.NewHBox(withMinTypingInputWidth(origemSelect), withMinTypingInputWidth(destinoSelect)),
 		container.NewHBox(withMinTypingInputWidth(solicitanteEntry), widget.NewLabel("Documento: TR"), withMinTypingInputWidth(movimentoEntry)),
 		withMinTypingInputWidth(observacaoEntry),
 		container.NewHBox(withMinTypingInputWidth(insumoEntry), addButton, sendButton, clearButton),
@@ -276,7 +300,6 @@ func AddSelectedTransferInsumo(ctx context.Context, state *AppState, item models
 		return err
 	}
 	originAppropriations := AppropriationsWithStock(appropriations)
-	destinationAppropriations = AppropriationsWithStock(destinationAppropriations)
 	item.Apropriacoes = append([]models.Apropriacao(nil), originAppropriations...)
 	state.Transferencia.Itens = append(state.Transferencia.Itens, NewTransferenciaItemState(item, originAppropriations, destinationAppropriations))
 	state.Transferencia.InsumoIDInput = ""
@@ -382,16 +405,24 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 		originAppropriationCode, originAppropriationDescription := SplitAppropriationLabel(item.ApropriacaoOrigemSelecionada)
 		destinationAppropriationCode, destinationAppropriationDescription := SplitAppropriationLabel(item.ApropriacaoDestinoSelecionada)
 		items = append(items, models.ItemTransferido{
-			ID:                            item.Insumo.ID,
-			Nome:                          item.Insumo.Nome,
-			Detalhe:                       item.Insumo.Detalhe,
-			Marca:                         item.Insumo.Marca,
-			Apropriacao:                   originAppropriationCode,
-			ApropriacaoDescricao:          originAppropriationDescription,
-			ApropriacaoDestino:            destinationAppropriationCode,
-			ApropriacaoDestinoDescricao:   destinationAppropriationDescription,
-			Quantidade:                    quantity,
-			QuantidadeDisponivel:          item.QuantidadeDisponivel,
+			ID:                               item.Insumo.ID,
+			Nome:                             item.Insumo.Nome,
+			Detalhe:                          item.Insumo.Detalhe,
+			DetalheID:                        item.Insumo.DetalheID,
+			Marca:                            item.Insumo.Marca,
+			MarcaID:                          item.Insumo.MarcaID,
+			Unidade:                          item.Insumo.Unidade,
+			PrecoUnitario:                    item.Insumo.PrecoMedio,
+			Apropriacao:                      originAppropriationCode,
+			ApropriacaoDescricao:             originAppropriationDescription,
+			ApropriacaoOrigemBuildingUnitID:  state.Transferencia.Itens[index].selectedOriginAppropriation().BuildingUnitID,
+			ApropriacaoOrigemSheetItemID:     state.Transferencia.Itens[index].selectedOriginAppropriation().SheetItemID,
+			ApropriacaoDestino:               destinationAppropriationCode,
+			ApropriacaoDestinoDescricao:      destinationAppropriationDescription,
+			ApropriacaoDestinoBuildingUnitID: state.Transferencia.Itens[index].selectedDestinationAppropriation().BuildingUnitID,
+			ApropriacaoDestinoSheetItemID:    state.Transferencia.Itens[index].selectedDestinationAppropriation().SheetItemID,
+			Quantidade:                       quantity,
+			QuantidadeDisponivel:             item.QuantidadeDisponivel,
 		})
 	}
 
@@ -548,11 +579,15 @@ func AppropriationLabels(appropriations []models.Apropriacao) []string {
 }
 
 func AppropriationLabel(appropriation models.Apropriacao) string {
-	if strings.TrimSpace(appropriation.Descricao) == "" {
+	description := strings.TrimSpace(appropriation.Descricao)
+	if description == "" {
+		description = strings.TrimSpace(appropriation.Referencia)
+	}
+	if description == "" {
 		return appropriation.Codigo
 	}
 
-	return appropriation.Codigo + " - " + appropriation.Descricao
+	return appropriation.Codigo + " - " + description
 }
 
 func SplitAppropriationLabel(label string) (string, string) {

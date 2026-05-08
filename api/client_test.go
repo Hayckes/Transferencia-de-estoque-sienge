@@ -50,13 +50,13 @@ func TestNewClientWithBaseURLValidatesRequiredFields(t *testing.T) {
 	}
 }
 
-func TestValidateCredentialsUsesBuildingsEndpointAndBasicAuth(t *testing.T) {
+func TestValidateCredentialsUsesCostCenterEndpointAndBasicAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("method = %s, want GET", r.Method)
 		}
-		if r.URL.String() != "/public/api/v1/buildings?limit=1" {
-			t.Fatalf("URL = %s, want /public/api/v1/buildings?limit=1", r.URL.String())
+		if r.URL.String() != "/public/api/v1/cost-centers/1" {
+			t.Fatalf("URL = %s, want /public/api/v1/cost-centers/1", r.URL.String())
 		}
 
 		wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("usuario:senha"))
@@ -68,7 +68,20 @@ func TestValidateCredentialsUsesBuildingsEndpointAndBasicAuth(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"results":[]}`))
+		_, _ = w.Write([]byte(`{"id":1,"description":"Centro de Custo"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	if err := client.ValidateCredentials(context.Background()); err != nil {
+		t.Fatalf("ValidateCredentials() error = %v", err)
+	}
+}
+
+func TestValidateCredentialsAcceptsCostCenterNotFoundAsValidAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not found"}`))
 	}))
 	defer server.Close()
 
@@ -85,7 +98,6 @@ func TestValidateCredentialsMapsHTTPStatuses(t *testing.T) {
 	}{
 		{statusCode: http.StatusUnauthorized, wantText: "Credenciais invalidas"},
 		{statusCode: http.StatusForbidden, wantText: "Credenciais invalidas"},
-		{statusCode: http.StatusNotFound, wantText: "Recurso nao encontrado"},
 		{statusCode: http.StatusUnprocessableEntity, wantText: "Dados invalidos"},
 		{statusCode: http.StatusInternalServerError, wantText: "Erro no servidor"},
 	}

@@ -186,7 +186,7 @@ func TestParseAppropriationsSupportsSiengeStockFields(t *testing.T) {
 		t.Fatalf("parseAppropriations() error = %v", err)
 	}
 
-	want := []models.Apropriacao{{Codigo: "08.004.001", BuildingUnitID: 3, SheetItemID: 42, Quantidade: 12.3456}}
+	want := []models.Apropriacao{{Codigo: "08.004.001", Descricao: "08.004.001", Referencia: "08.004.001", BuildingUnitID: 3, SheetItemID: 42, Quantidade: 12.3456}}
 	if !reflect.DeepEqual(appropriations, want) {
 		t.Fatalf("appropriations = %#v, want %#v", appropriations, want)
 	}

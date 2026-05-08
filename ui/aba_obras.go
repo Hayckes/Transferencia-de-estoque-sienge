@@ -98,7 +98,7 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 		centroCustoSelect.PlaceHolder = "Selecione o centro de custo"
 		centroCustoSelect.SetSelected(state.Obras.CentroCustoSelecionado)
 		items = append(items, container.NewHBox(
-			centroCustoSelect,
+			withMinTypingInputWidth(centroCustoSelect),
 			widget.NewButton("Adicionar selecionado", func() {
 				if err := AddSelectedCostCenterFromLabel(state, state.Obras.CentroCustoSelecionado); err != nil {
 					setObrasStatus(state, status, err.Error())

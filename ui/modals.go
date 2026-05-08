@@ -16,6 +16,24 @@ import (
 	"sienge-transfer/models"
 )
 
+func ShowInsumoDetailsModal(window fyne.Window, item models.Insumo) {
+	if window == nil {
+		return
+	}
+	rows := []fyne.CanvasObject{
+		widget.NewLabel(fmt.Sprintf("%s %s - %s", item.Nome, item.Detalhe, item.Marca)),
+		widget.NewSeparator(),
+		widget.NewLabel("Codigo | Nome/Referencia | Quantidade"),
+	}
+	for _, appropriation := range item.Apropriacoes {
+		rows = append(rows, widget.NewLabel(fmt.Sprintf("%s | %s | %s", appropriation.Codigo, appropriationDisplayName(appropriation), models.FormatQuantidade(appropriation.Quantidade, item.Unidade))))
+	}
+	content := container.NewVScroll(container.NewVBox(rows...))
+	d := dialog.NewCustom("Detalhes do insumo", "Fechar", content, window)
+	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), insumoSelectionDialogWidthRatio, insumoSelectionDialogHeightRatio))
+	d.Show()
+}
+
 func ShowInsumoSelectionModal(window fyne.Window, options []models.Insumo, onSelect func(models.Insumo)) {
 	if window == nil || len(options) == 0 {
 		return
@@ -76,9 +94,26 @@ func TransferSummaryText(transfer models.Transferencia) string {
 	}
 	builder.WriteString("\nInsumos:\n")
 	for _, item := range transfer.Insumos {
-		builder.WriteString(fmt.Sprintf("- %d %s %s %s | origem %s | destino %s | %s\n", item.ID, item.Nome, item.Detalhe, item.Marca, item.Apropriacao, item.ApropriacaoDestino, models.FormatQuantidade(item.Quantidade, "")))
+		builder.WriteString(fmt.Sprintf("- %d %s %s %s | origem %s | destino %s | %s\n", item.ID, item.Nome, item.Detalhe, item.Marca, itemAppropriationText(item.Apropriacao, item.ApropriacaoDescricao), itemAppropriationText(item.ApropriacaoDestino, item.ApropriacaoDestinoDescricao), models.FormatQuantidade(item.Quantidade, item.Unidade)))
 	}
 	return builder.String()
+}
+
+func itemAppropriationText(code, description string) string {
+	if strings.TrimSpace(description) == "" {
+		return strings.TrimSpace(code)
+	}
+	return strings.TrimSpace(code) + " - " + strings.TrimSpace(description)
+}
+
+func appropriationDisplayName(appropriation models.Apropriacao) string {
+	if strings.TrimSpace(appropriation.Descricao) != "" {
+		return strings.TrimSpace(appropriation.Descricao)
+	}
+	if strings.TrimSpace(appropriation.Referencia) != "" {
+		return strings.TrimSpace(appropriation.Referencia)
+	}
+	return strings.TrimSpace(appropriation.Codigo)
 }
 
 func MaybeShowCredentialReonboarding(state *AppState, err error, status func(string)) bool {

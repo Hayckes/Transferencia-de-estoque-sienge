@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"sienge-transfer/models"
 )
@@ -21,7 +22,7 @@ func (c *Client) GetCostCenters(ctx context.Context, costCenterID int) ([]models
 	body, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/cost-centers/%d", costCenterID), nil)
 	if err != nil {
 		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound && !strings.Contains(apiErr.Message, "formato HTML") {
 			return nil, ErrCostCenterNotFound
 		}
 		return nil, err

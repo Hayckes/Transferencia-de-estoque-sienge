@@ -22,26 +22,32 @@ func TestBuildStockTransferPayloadWithSingleItem(t *testing.T) {
 		t.Fatalf("BuildStockTransferPayload() error = %v", err)
 	}
 
-	if payload.OriginBuildingID != 121 || payload.DestinationBuildingID != 205 {
-		t.Fatalf("payload buildings = %d/%d, want 121/205", payload.OriginBuildingID, payload.DestinationBuildingID)
+	if payload.SourceCostCenterID != 121 || payload.DestinationCostCenterID != 205 {
+		t.Fatalf("payload buildings = %d/%d, want 121/205", payload.SourceCostCenterID, payload.DestinationCostCenterID)
 	}
-	if payload.DocumentTypeCode != "TR" || payload.MovementTypeCode != 3 {
-		t.Fatalf("payload document/movement = %s/%d, want TR/3", payload.DocumentTypeCode, payload.MovementTypeCode)
+	if payload.DocumentID != "TR" || payload.MovementTypeID != 3 {
+		t.Fatalf("payload document/movement = %s/%d, want TR/3", payload.DocumentID, payload.MovementTypeID)
 	}
-	if payload.TransferDate != "2024-07-15T10:30:00" {
-		t.Fatalf("TransferDate = %q, want 2024-07-15T10:30:00", payload.TransferDate)
+	if payload.MovementDate != "2024-07-15" {
+		t.Fatalf("MovementDate = %q, want 2024-07-15", payload.MovementDate)
 	}
 	if len(payload.Items) != 1 {
 		t.Fatalf("len(Items) = %d, want 1", len(payload.Items))
 	}
-	if payload.Items[0].SupplyID != 3421 || payload.Items[0].Detail != "CP III" || payload.Items[0].Brand != "Votorantim" || payload.Items[0].AppropriationCode != "A001" || payload.Items[0].Quantity != 50 {
-		t.Fatalf("Items[0] = %#v, want mapped item", payload.Items[0])
+	if payload.Items[0].Source.ResourceID != 3421 || payload.Items[0].Source.DetailID != 10 || payload.Items[0].Source.TrademarkID != 5 || payload.Items[0].Source.Quantity != 50 || payload.Items[0].Source.UnitOfMeasure != "SC" {
+		t.Fatalf("Items[0].Source = %#v, want mapped source item", payload.Items[0].Source)
 	}
-	if !strings.Contains(payload.Note, "Transferencia realizada por Joao Silva (Engenheiro)") {
-		t.Fatalf("Note = %q, want user and role", payload.Note)
+	if payload.Items[0].Destination.ResourceID != 3421 || payload.Items[0].Destination.UnitPrice != 30.5 {
+		t.Fatalf("Items[0].Destination = %#v, want mapped destination item", payload.Items[0].Destination)
 	}
-	if !strings.Contains(payload.Note, "Observacao: Prioridade alta") {
-		t.Fatalf("Note = %q, want observation", payload.Note)
+	if len(payload.Items[0].Source.BuildingAppropriations) != 1 || len(payload.Items[0].Destination.BuildingAppropriations) != 1 {
+		t.Fatalf("Items[0] appropriations = %#v, want mapped appropriations", payload.Items[0])
+	}
+	if !strings.Contains(payload.Notes, "Transferencia realizada por Joao Silva (Engenheiro)") {
+		t.Fatalf("Notes = %q, want user and role", payload.Notes)
+	}
+	if !strings.Contains(payload.Notes, "Observacao: Prioridade alta") {
+		t.Fatalf("Notes = %q, want observation", payload.Notes)
 	}
 }
 
@@ -58,7 +64,7 @@ func TestBuildStockTransferPayloadWithMultipleItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(payload) error = %v", err)
 	}
-	if !strings.Contains(string(data), `"supplyId":3421`) || !strings.Contains(string(data), `"supplyId":9876`) {
+	if !strings.Contains(string(data), `"resourceId":3421`) || !strings.Contains(string(data), `"resourceId":9876`) {
 		t.Fatalf("payload JSON = %s, want both items", string(data))
 	}
 }
@@ -103,6 +109,10 @@ func TestValidateTransferenciaRejectsInvalidItems(t *testing.T) {
 		{name: "missing supply id", mutate: func(i *models.ItemTransferido) { i.ID = 0 }, want: "ID do insumo"},
 		{name: "missing origin appropriation", mutate: func(i *models.ItemTransferido) { i.Apropriacao = "" }, want: "origem"},
 		{name: "missing destination appropriation", mutate: func(i *models.ItemTransferido) { i.ApropriacaoDestino = "" }, want: "destino"},
+		{name: "missing origin ids", mutate: func(i *models.ItemTransferido) { i.ApropriacaoOrigemBuildingUnitID = 0 }, want: "identificadores da apropriacao de origem"},
+		{name: "missing destination ids", mutate: func(i *models.ItemTransferido) { i.ApropriacaoDestinoBuildingUnitID = 0 }, want: "identificadores da apropriacao de destino"},
+		{name: "missing unit", mutate: func(i *models.ItemTransferido) { i.Unidade = "" }, want: "unidade de medida"},
+		{name: "missing unit price", mutate: func(i *models.ItemTransferido) { i.PrecoUnitario = 0 }, want: "preco unitario"},
 		{name: "zero quantity", mutate: func(i *models.ItemTransferido) { i.Quantidade = 0 }, want: "maior que zero"},
 		{name: "negative quantity", mutate: func(i *models.ItemTransferido) { i.Quantidade = -1 }, want: "maior que zero"},
 		{name: "quantity greater than available", mutate: func(i *models.ItemTransferido) { i.Quantidade = 11; i.QuantidadeDisponivel = 10 }, want: "maior que a disponivel"},
@@ -154,15 +164,15 @@ func TestCreateStockTransferPostsPayloadAndExtractsIDFromBody(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if r.URL.String() != "/public/api/v1/stock-transfers" {
-			t.Fatalf("URL = %s, want /public/api/v1/stock-transfers", r.URL.String())
+		if r.URL.String() != "/public/api/v1/stock-movements/transfer" {
+			t.Fatalf("URL = %s, want /public/api/v1/stock-movements/transfer", r.URL.String())
 		}
 
 		var payload StockTransferPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("Decode(body) error = %v", err)
 		}
-		if payload.OriginBuildingID != 121 || payload.Items[0].SupplyID != 3421 {
+		if payload.SourceCostCenterID != 121 || payload.Items[0].Source.ResourceID != 3421 {
 			t.Fatalf("payload = %#v, want transfer payload", payload)
 		}
 
@@ -183,7 +193,7 @@ func TestCreateStockTransferPostsPayloadAndExtractsIDFromBody(t *testing.T) {
 
 func TestCreateStockTransferExtractsIDFromLocationHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "https://example.com/stock-transfers/7842")
+		w.Header().Set("Location", "https://example.com/stock-movements/transfer/7842")
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer server.Close()
@@ -236,7 +246,7 @@ func TestCreateStockTransferReturnsAPIError(t *testing.T) {
 }
 
 func TestExtractMovementIDChecksBodyBeforeLocation(t *testing.T) {
-	resp := &http.Response{Header: http.Header{"Location": []string{"https://example.com/stock-transfers/7842"}}}
+	resp := &http.Response{Header: http.Header{"Location": []string{"https://example.com/stock-movements/transfer/7842"}}}
 	movementID := ExtractMovementID(resp, []byte(`{"documentNumber":"DOC-1"}`))
 	if movementID != "DOC-1" {
 		t.Fatalf("ExtractMovementID() = %q, want body ID DOC-1", movementID)
@@ -300,26 +310,44 @@ func validTransferencia() models.Transferencia {
 		CodigoTipoMovimento: 3,
 		Insumos: []models.ItemTransferido{
 			{
-				ID:                   3421,
-				Nome:                 "Cimento",
-				Detalhe:              "CP III",
-				Marca:                "Votorantim",
-				Apropriacao:          "A001",
-				ApropriacaoDescricao: "Fundacao",
-				ApropriacaoDestino:   "D001",
-				Quantidade:           50,
-				QuantidadeDisponivel: 150,
+				ID:                               3421,
+				Nome:                             "Cimento",
+				Detalhe:                          "CP III",
+				DetalheID:                        10,
+				Marca:                            "Votorantim",
+				MarcaID:                          5,
+				Unidade:                          "SC",
+				PrecoUnitario:                    30.5,
+				Apropriacao:                      "A001",
+				ApropriacaoDescricao:             "Fundacao",
+				ApropriacaoOrigemBuildingUnitID:  3,
+				ApropriacaoOrigemSheetItemID:     4,
+				ApropriacaoDestino:               "D001",
+				ApropriacaoDestinoDescricao:      "Destino",
+				ApropriacaoDestinoBuildingUnitID: 7,
+				ApropriacaoDestinoSheetItemID:    8,
+				Quantidade:                       50,
+				QuantidadeDisponivel:             150,
 			},
 			{
-				ID:                   9876,
-				Nome:                 "Areia",
-				Detalhe:              "Media",
-				Marca:                "Regional",
-				Apropriacao:          "A002",
-				ApropriacaoDescricao: "Estrutura",
-				ApropriacaoDestino:   "D002",
-				Quantidade:           20.5,
-				QuantidadeDisponivel: 30,
+				ID:                               9876,
+				Nome:                             "Areia",
+				Detalhe:                          "Media",
+				DetalheID:                        11,
+				Marca:                            "Regional",
+				MarcaID:                          6,
+				Unidade:                          "M3",
+				PrecoUnitario:                    12.25,
+				Apropriacao:                      "A002",
+				ApropriacaoDescricao:             "Estrutura",
+				ApropriacaoOrigemBuildingUnitID:  9,
+				ApropriacaoOrigemSheetItemID:     10,
+				ApropriacaoDestino:               "D002",
+				ApropriacaoDestinoDescricao:      "Acabamento",
+				ApropriacaoDestinoBuildingUnitID: 11,
+				ApropriacaoDestinoSheetItemID:    12,
+				Quantidade:                       20.5,
+				QuantidadeDisponivel:             30,
 			},
 		},
 	}

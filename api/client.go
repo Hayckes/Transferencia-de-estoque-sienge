@@ -87,7 +87,10 @@ func (c *Client) BaseURL() string {
 }
 
 func (c *Client) ValidateCredentials(ctx context.Context) error {
-	_, err := c.do(ctx, http.MethodGet, "/buildings?limit=1", nil)
+	_, err := c.GetCostCenters(ctx, 1)
+	if errors.Is(err, ErrCostCenterNotFound) {
+		return nil
+	}
 	return err
 }
 
@@ -143,17 +146,6 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body []byt
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
-		if err != nil {
-			return nil, err
-		}
-		if len(respBody) > maxErrorBody {
-			respBody = respBody[:maxErrorBody]
-		}
-		return nil, newAPIError(resp.StatusCode, respBody)
-	}
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -163,6 +155,12 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body []byt
 			StatusCode: resp.StatusCode,
 			Message:    "Resposta inesperada do Sienge em formato HTML. Verifique a URL base da API, as credenciais e se este endpoint esta disponivel para a empresa.",
 		}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if len(respBody) > maxErrorBody {
+			respBody = respBody[:maxErrorBody]
+		}
+		return nil, newAPIError(resp.StatusCode, respBody)
 	}
 
 	return &apiResponse{

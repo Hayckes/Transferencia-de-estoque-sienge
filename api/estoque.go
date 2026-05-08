@@ -85,15 +85,21 @@ func parseStockItems(body []byte) ([]models.Insumo, error) {
 		}
 
 		quantity, _ := getFloat(object, "quantity", "availableQuantity", "balance", "stockQuantity")
+		detailID, _ := getInt(object, "detailId")
+		trademarkID, _ := getInt(object, "trademarkId")
+		averagePrice, _ := getFloat(object, "averagePrice", "unitPrice")
 		original, _ := json.Marshal(object)
 
 		items = append(items, models.Insumo{
 			ID:           id,
 			Nome:         getString(object, "resourceName", "supplyName", "name", "description"),
 			Detalhe:      getString(object, "detailDescription", "detail", "detailName", "specification"),
+			DetalheID:    detailID,
 			Marca:        getString(object, "trademarkDescription", "brand", "brandName", "trademark"),
+			MarcaID:      trademarkID,
 			Unidade:      getString(object, "unitOfMeasure", "unit", "measureUnit"),
 			Quantidade:   quantity,
+			PrecoMedio:   averagePrice,
 			OriginalJSON: string(original),
 		})
 	}
@@ -112,13 +118,19 @@ func parseAppropriations(body []byte) ([]models.Apropriacao, error) {
 		quantity, _ := getFloat(object, "quantity", "availableQuantity", "balance", "stockQuantity")
 		buildingUnitID, _ := getInt(object, "buildingUnitId", "buildingUnitID", "unitId")
 		sheetItemID, _ := getInt(object, "sheetItemId", "sheetItemID", "itemId")
+		reference := getString(object, "costEstimationItemReference", "reference")
 		code := getString(object, "appropriationCode", "buildingAppropriationCode", "costEstimationItemReference", "code", "id")
 		if code == "" && sheetItemID > 0 {
 			code = strconv.Itoa(sheetItemID)
 		}
+		description := getString(object, "appropriationDescription", "buildingAppropriationDescription", "description", "name")
+		if description == "" {
+			description = reference
+		}
 		appropriations = append(appropriations, models.Apropriacao{
 			Codigo:         code,
-			Descricao:      getString(object, "appropriationDescription", "buildingAppropriationDescription", "description", "name"),
+			Descricao:      description,
+			Referencia:     reference,
 			BuildingUnitID: buildingUnitID,
 			SheetItemID:    sheetItemID,
 			Quantidade:     quantity,

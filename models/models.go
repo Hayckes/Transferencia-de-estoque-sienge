@@ -32,6 +32,7 @@ type Obra struct {
 type Apropriacao struct {
 	Codigo         string  `json:"codigo"`
 	Descricao      string  `json:"descricao"`
+	Referencia     string  `json:"referencia,omitempty"`
 	BuildingUnitID int     `json:"building_unit_id,omitempty"`
 	SheetItemID    int     `json:"sheet_item_id,omitempty"`
 	Quantidade     float64 `json:"quantidade"`
@@ -41,9 +42,12 @@ type Insumo struct {
 	ID           int           `json:"id"`
 	Nome         string        `json:"nome"`
 	Detalhe      string        `json:"detalhe"`
+	DetalheID    int           `json:"detalhe_id,omitempty"`
 	Marca        string        `json:"marca"`
+	MarcaID      int           `json:"marca_id,omitempty"`
 	Unidade      string        `json:"unidade"`
 	Quantidade   float64       `json:"quantidade"`
+	PrecoMedio   float64       `json:"preco_medio,omitempty"`
 	Apropriacoes []Apropriacao `json:"apropriacoes"`
 	OriginalJSON string        `json:"original_json,omitempty"`
 }
@@ -65,16 +69,24 @@ type Transferencia struct {
 }
 
 type ItemTransferido struct {
-	ID                   int     `json:"id"`
-	Nome                 string  `json:"nome"`
-	Detalhe              string  `json:"detalhe"`
-	Marca                string  `json:"marca"`
-	Apropriacao          string  `json:"apropriacao"`
-	ApropriacaoDescricao string  `json:"apropriacao_descricao,omitempty"`
-	ApropriacaoDestino   string  `json:"apropriacao_destino,omitempty"`
-	ApropriacaoDestinoDescricao string `json:"apropriacao_destino_descricao,omitempty"`
-	Quantidade           float64 `json:"quantidade"`
-	QuantidadeDisponivel float64 `json:"quantidade_disponivel,omitempty"`
+	ID                               int     `json:"id"`
+	Nome                             string  `json:"nome"`
+	Detalhe                          string  `json:"detalhe"`
+	DetalheID                        int     `json:"detalhe_id,omitempty"`
+	Marca                            string  `json:"marca"`
+	MarcaID                          int     `json:"marca_id,omitempty"`
+	Unidade                          string  `json:"unidade,omitempty"`
+	PrecoUnitario                    float64 `json:"preco_unitario,omitempty"`
+	Apropriacao                      string  `json:"apropriacao"`
+	ApropriacaoDescricao             string  `json:"apropriacao_descricao,omitempty"`
+	ApropriacaoOrigemBuildingUnitID  int     `json:"apropriacao_origem_building_unit_id,omitempty"`
+	ApropriacaoOrigemSheetItemID     int     `json:"apropriacao_origem_sheet_item_id,omitempty"`
+	ApropriacaoDestino               string  `json:"apropriacao_destino,omitempty"`
+	ApropriacaoDestinoDescricao      string  `json:"apropriacao_destino_descricao,omitempty"`
+	ApropriacaoDestinoBuildingUnitID int     `json:"apropriacao_destino_building_unit_id,omitempty"`
+	ApropriacaoDestinoSheetItemID    int     `json:"apropriacao_destino_sheet_item_id,omitempty"`
+	Quantidade                       float64 `json:"quantidade"`
+	QuantidadeDisponivel             float64 `json:"quantidade_disponivel,omitempty"`
 }
 
 func (o Obra) Label() string {

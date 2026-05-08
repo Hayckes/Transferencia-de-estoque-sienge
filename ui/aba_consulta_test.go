@@ -27,13 +27,13 @@ func TestObraLabelsAndIDFromLabel(t *testing.T) {
 	}
 }
 
-func TestConsultaTabStateDoesNotKeepObservationField(t *testing.T) {
+func TestConsultaTabStateFields(t *testing.T) {
 	stateType := reflect.TypeOf(ConsultaTabState{})
 	if _, ok := stateType.FieldByName("Observacao"); ok {
 		t.Fatal("ConsultaTabState should not keep an observation field")
 	}
-	if _, ok := stateType.FieldByName("DetalheAberto"); ok {
-		t.Fatal("ConsultaTabState should not keep a details modal state")
+	if _, ok := stateType.FieldByName("DetalheAberto"); !ok {
+		t.Fatal("ConsultaTabState should keep a details modal state")
 	}
 }
 
@@ -98,6 +98,31 @@ func TestRunConsultaCallsStockService(t *testing.T) {
 	if len(state.Consulta.Resultados) != 2 {
 		t.Fatalf("len(Resultados) = %d, want 2", len(state.Consulta.Resultados))
 	}
+	if state.Consulta.DetalheAberto != nil {
+		t.Fatalf("DetalheAberto = %#v, want nil after query", state.Consulta.DetalheAberto)
+	}
+}
+
+func TestLoadConsultaDetalheLoadsAppropriations(t *testing.T) {
+	stock := &fakeStockService{appropriations: []models.Apropriacao{{Codigo: "A001", Descricao: "Fundacao", Quantidade: 40}}}
+	state := NewAppState(testConfig())
+	state.Stock = stock
+	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
+	state.Consulta.Resultados = []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC"}}
+
+	item, err := LoadConsultaDetalhe(context.Background(), state, 0)
+	if err != nil {
+		t.Fatalf("LoadConsultaDetalhe() error = %v", err)
+	}
+	if !stock.approprCalled || stock.resourceID != 3421 || stock.costCenterID != 121 {
+		t.Fatalf("appropriation call not tracked correctly: %#v", stock)
+	}
+	if len(item.Apropriacoes) != 1 || item.Apropriacoes[0].Descricao != "Fundacao" {
+		t.Fatalf("item.Apropriacoes = %#v, want loaded appropriation", item.Apropriacoes)
+	}
+	if state.Consulta.DetalheAberto == nil || len(state.Consulta.DetalheAberto.Apropriacoes) != 1 {
+		t.Fatalf("DetalheAberto = %#v, want populated details", state.Consulta.DetalheAberto)
+	}
 }
 
 func TestRunConsultaDoesNotCallAPIWhenIDsAreEmpty(t *testing.T) {
@@ -143,6 +168,9 @@ func TestClearConsultaResetsOnlyConsultaState(t *testing.T) {
 	if state.Consulta.ObraSelecionada != "" || state.Consulta.InsumoIDsInput != "" || len(state.Consulta.Resultados) != 0 {
 		t.Fatalf("Consulta was not cleared: %#v", state.Consulta)
 	}
+	if state.Consulta.DetalheAberto != nil {
+		t.Fatalf("DetalheAberto = %#v, want nil after clear", state.Consulta.DetalheAberto)
+	}
 	if state.Config.Usuario.Nome == "" {
 		t.Fatal("ClearConsulta() should not clear app config")
 	}
@@ -157,7 +185,7 @@ func TestConsultaResultRow(t *testing.T) {
 		Quantidade: 150,
 		Unidade:    "SC",
 		Apropriacoes: []models.Apropriacao{
-			{Codigo: "A001", Descricao: "Fundacao", Quantidade: 40},
+			{Codigo: "A001", Descricao: "Fundacao", Referencia: "00.001.001.001", Quantidade: 40},
 		},
 	}
 
@@ -166,6 +194,16 @@ func TestConsultaResultRow(t *testing.T) {
 		if !strings.Contains(row, want) {
 			t.Fatalf("ConsultaResultRow() = %q, want containing %q", row, want)
 		}
+	}
+}
+
+func TestBuildHistoricoAppropriationTextHelpers(t *testing.T) {
+	appropriation := models.Apropriacao{Codigo: "A001", Descricao: "Fundacao", Referencia: "00.001.001.001", Quantidade: 40}
+	if got := appropriationDisplayName(appropriation); got != "Fundacao" {
+		t.Fatalf("appropriationDisplayName() = %q, want Fundacao", got)
+	}
+	if got := appropriationDisplayName(models.Apropriacao{Codigo: "A001", Referencia: "00.001.001.001"}); got != "00.001.001.001" {
+		t.Fatalf("appropriationDisplayName() fallback = %q, want reference", got)
 	}
 }
 

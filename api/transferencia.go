@@ -12,7 +12,7 @@ import (
 	"sienge-transfer/models"
 )
 
-const stockTransfersEndpoint = "/stock-transfers"
+const stockTransfersEndpoint = "/stock-movements/transfer"
 
 type TransferValidationError struct {
 	Errors []string
@@ -23,21 +23,36 @@ func (e *TransferValidationError) Error() string {
 }
 
 type StockTransferPayload struct {
-	OriginBuildingID      int                        `json:"originBuildingId"`
-	DestinationBuildingID int                        `json:"destinationBuildingId"`
-	DocumentTypeCode      string                     `json:"documentTypeCode"`
-	MovementTypeCode      int                        `json:"movementTypeCode"`
-	TransferDate          string                     `json:"transferDate"`
-	Note                  string                     `json:"note"`
-	Items                 []StockTransferItemPayload `json:"items"`
+	SourceCostCenterID      int                        `json:"sourceCostCenterId"`
+	DestinationCostCenterID int                        `json:"destinationCostCenterId"`
+	SourceDepartmentID      int                        `json:"sourceDepartmentId,omitempty"`
+	DestinationDepartmentID int                        `json:"destinationDepartmentId,omitempty"`
+	DocumentID              string                     `json:"documentId"`
+	MovementTypeID          int                        `json:"movementTypeId"`
+	MovementDate            string                     `json:"movementDate"`
+	Notes                   string                     `json:"notes"`
+	Items                   []StockTransferItemPayload `json:"items"`
 }
 
 type StockTransferItemPayload struct {
-	SupplyID          int     `json:"supplyId"`
-	Detail            string  `json:"detail"`
-	Brand             string  `json:"brand"`
-	AppropriationCode string  `json:"appropriationCode"`
-	Quantity          float64 `json:"quantity"`
+	Source      StockTransferItemSidePayload `json:"source"`
+	Destination StockTransferItemSidePayload `json:"destination"`
+}
+
+type StockTransferItemSidePayload struct {
+	ResourceID             int                                  `json:"resourceId"`
+	DetailID               int                                  `json:"detailId,omitempty"`
+	TrademarkID            int                                  `json:"trademarkId,omitempty"`
+	Quantity               float64                              `json:"quantity,omitempty"`
+	UnitOfMeasure          string                               `json:"unitOfMeasure,omitempty"`
+	UnitPrice              float64                              `json:"unitPrice,omitempty"`
+	BuildingAppropriations []StockTransferBuildingAppropriation `json:"buildingAppropriations,omitempty"`
+}
+
+type StockTransferBuildingAppropriation struct {
+	BuildingUnitID int     `json:"buildingUnitId"`
+	SheetItemID    int     `json:"sheetItemId"`
+	Percentage     float64 `json:"percentage"`
 }
 
 func BuildStockTransferPayload(transfer models.Transferencia) (StockTransferPayload, error) {
@@ -47,23 +62,45 @@ func BuildStockTransferPayload(transfer models.Transferencia) (StockTransferPayl
 
 	items := make([]StockTransferItemPayload, 0, len(transfer.Insumos))
 	for _, item := range transfer.Insumos {
+		sourceAppropriation := StockTransferBuildingAppropriation{
+			BuildingUnitID: item.ApropriacaoOrigemBuildingUnitID,
+			SheetItemID:    item.ApropriacaoOrigemSheetItemID,
+			Percentage:     100,
+		}
+		destinationAppropriation := StockTransferBuildingAppropriation{
+			BuildingUnitID: item.ApropriacaoDestinoBuildingUnitID,
+			SheetItemID:    item.ApropriacaoDestinoSheetItemID,
+			Percentage:     100,
+		}
 		items = append(items, StockTransferItemPayload{
-			SupplyID:          item.ID,
-			Detail:            strings.TrimSpace(item.Detalhe),
-			Brand:             strings.TrimSpace(item.Marca),
-			AppropriationCode: strings.TrimSpace(item.Apropriacao),
-			Quantity:          item.Quantidade,
+			Source: StockTransferItemSidePayload{
+				ResourceID:             item.ID,
+				DetailID:               item.DetalheID,
+				TrademarkID:            item.MarcaID,
+				Quantity:               item.Quantidade,
+				UnitOfMeasure:          strings.TrimSpace(item.Unidade),
+				BuildingAppropriations: []StockTransferBuildingAppropriation{sourceAppropriation},
+			},
+			Destination: StockTransferItemSidePayload{
+				ResourceID:             item.ID,
+				DetailID:               item.DetalheID,
+				TrademarkID:            item.MarcaID,
+				UnitPrice:              item.PrecoUnitario,
+				BuildingAppropriations: []StockTransferBuildingAppropriation{destinationAppropriation},
+			},
 		})
 	}
 
 	return StockTransferPayload{
-		OriginBuildingID:      transfer.ObraOrigemID,
-		DestinationBuildingID: transfer.ObraDestinoID,
-		DocumentTypeCode:      strings.TrimSpace(transfer.CodigoTipoDocumento),
-		MovementTypeCode:      transfer.CodigoTipoMovimento,
-		TransferDate:          transfer.DataHora.Format("2006-01-02T15:04:05"),
-		Note:                  BuildTransferNote(transfer),
-		Items:                 items,
+		SourceCostCenterID:      transfer.ObraOrigemID,
+		DestinationCostCenterID: transfer.ObraDestinoID,
+		SourceDepartmentID:      transfer.Insumos[0].ApropriacaoOrigemBuildingUnitID,
+		DestinationDepartmentID: transfer.Insumos[0].ApropriacaoDestinoBuildingUnitID,
+		DocumentID:              strings.TrimSpace(transfer.CodigoTipoDocumento),
+		MovementTypeID:          transfer.CodigoTipoMovimento,
+		MovementDate:            transfer.DataHora.Format("2006-01-02"),
+		Notes:                   BuildTransferNote(transfer),
+		Items:                   items,
 	}, nil
 }
 
@@ -106,6 +143,18 @@ func ValidateTransferencia(transfer models.Transferencia) []string {
 		if strings.TrimSpace(item.ApropriacaoDestino) == "" {
 			validationErrors = append(validationErrors, prefix+": apropriacao de destino obrigatoria")
 		}
+		if item.ApropriacaoOrigemBuildingUnitID <= 0 || item.ApropriacaoOrigemSheetItemID <= 0 {
+			validationErrors = append(validationErrors, prefix+": identificadores da apropriacao de origem obrigatorios")
+		}
+		if item.ApropriacaoDestinoBuildingUnitID <= 0 || item.ApropriacaoDestinoSheetItemID <= 0 {
+			validationErrors = append(validationErrors, prefix+": identificadores da apropriacao de destino obrigatorios")
+		}
+		if strings.TrimSpace(item.Unidade) == "" {
+			validationErrors = append(validationErrors, prefix+": unidade de medida obrigatoria")
+		}
+		if item.PrecoUnitario <= 0 {
+			validationErrors = append(validationErrors, prefix+": preco unitario obrigatorio")
+		}
 		if item.Quantidade <= 0 {
 			validationErrors = append(validationErrors, prefix+": quantidade deve ser maior que zero")
 		}
@@ -137,8 +186,8 @@ func BuildTransferNote(transfer models.Transferencia) string {
 			strings.TrimSpace(item.Nome),
 			strings.TrimSpace(item.Detalhe),
 			strings.TrimSpace(item.Marca),
-			strings.TrimSpace(item.Apropriacao),
-			strings.TrimSpace(item.ApropriacaoDestino),
+			formatAppropriationText(item.Apropriacao, item.ApropriacaoDescricao),
+			formatAppropriationText(item.ApropriacaoDestino, item.ApropriacaoDestinoDescricao),
 			models.FormatQuantidade(item.Quantidade, ""),
 		))
 	}
@@ -147,6 +196,13 @@ func BuildTransferNote(transfer models.Transferencia) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func formatAppropriationText(code, description string) string {
+	if strings.TrimSpace(description) == "" {
+		return strings.TrimSpace(code)
+	}
+	return strings.TrimSpace(code) + " - " + strings.TrimSpace(description)
 }
 
 func (c *Client) CreateStockTransfer(ctx context.Context, transfer models.Transferencia) (string, error) {

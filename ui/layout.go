@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	minTypingInputWidth              float32 = 180
+	minTypingInputWidth              float32 = 350
 	placeholderWidthExtraPads        float32 = 6
 	insumoSelectionDialogWidthRatio  float32 = 0.4
 	insumoSelectionDialogHeightRatio float32 = 0.6
