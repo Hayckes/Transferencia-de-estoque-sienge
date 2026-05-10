@@ -73,6 +73,60 @@ func TestAddTransferInsumoAddsSingleItemWithAppropriations(t *testing.T) {
 	}
 }
 
+func TestLoadTransferInsumoBuildsItemWithoutMutatingState(t *testing.T) {
+	stock := &fakeStockService{
+		items: []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC", Quantidade: 150}},
+		appropriationsByCostCenter: map[int][]models.Apropriacao{
+			121: {{Codigo: "A001", Descricao: "Fundacao", Quantidade: 40}},
+			205: {{Codigo: "D001", Descricao: "Destino", Quantidade: 15}},
+		},
+	}
+	state := validTransferState()
+	state.Stock = stock
+	state.Transferencia.InsumoIDInput = "3421"
+
+	itemState, err := LoadTransferInsumo(context.Background(), state, 3421)
+	if err != nil {
+		t.Fatalf("LoadTransferInsumo() error = %v", err)
+	}
+
+	if len(state.Transferencia.Itens) != 0 {
+		t.Fatalf("LoadTransferInsumo() mutated transfer items: %#v", state.Transferencia.Itens)
+	}
+	if itemState.Insumo.ID != 3421 || itemState.ApropriacaoOrigemSelecionada != "A001 - Fundacao" || itemState.ApropriacaoDestinoSelecionada != "D001 - Destino" {
+		t.Fatalf("itemState = %#v, want selected appropriations", itemState)
+	}
+
+	AddPreparedTransferInsumo(state, itemState)
+	if len(state.Transferencia.Itens) != 1 || state.Transferencia.Itens[0].Insumo.ID != 3421 {
+		t.Fatalf("Itens after AddPreparedTransferInsumo = %#v, want selected item", state.Transferencia.Itens)
+	}
+	if state.Transferencia.InsumoIDInput != "" {
+		t.Fatalf("InsumoIDInput = %q, want cleared", state.Transferencia.InsumoIDInput)
+	}
+}
+
+func TestLoadTransferInsumoMultipleOptionsDoesNotMutateState(t *testing.T) {
+	stock := &fakeStockService{items: []models.Insumo{{ID: 3421, Detalhe: "CP III"}, {ID: 3421, Detalhe: "CP II"}}}
+	state := validTransferState()
+	state.Stock = stock
+
+	_, err := LoadTransferInsumo(context.Background(), state, 3421)
+	var multipleErr *MultipleInsumosError
+	if !errors.As(err, &multipleErr) {
+		t.Fatalf("LoadTransferInsumo() error type = %T, want MultipleInsumosError", err)
+	}
+	if len(multipleErr.Options) != 2 {
+		t.Fatalf("len(Options) = %d, want 2", len(multipleErr.Options))
+	}
+	if len(state.Transferencia.Itens) != 0 {
+		t.Fatalf("LoadTransferInsumo() mutated transfer items: %#v", state.Transferencia.Itens)
+	}
+	if stock.approprCalled {
+		t.Fatal("appropriations should not be loaded before the user selects an option")
+	}
+}
+
 func TestAddTransferInsumoRequiresDestinationBeforeCallingAPI(t *testing.T) {
 	stock := &fakeStockService{}
 	state := NewAppState(testConfig())
@@ -188,6 +242,37 @@ func TestBuildTransferenciaFromState(t *testing.T) {
 	}
 }
 
+func TestBuildTransferenciaFromStateUsesSelectedAppropriationIDsForDuplicateLabels(t *testing.T) {
+	state := validTransferState()
+	originSelected := models.Apropriacao{Codigo: "A001", Descricao: "Fundacao", BuildingUnitID: 4, SheetItemID: 16, Quantidade: 30}
+	destinationSelected := models.Apropriacao{Codigo: "D001", Descricao: "Destino", BuildingUnitID: 8, SheetItemID: 18, Quantidade: 0}
+	state.Transferencia.Itens = []TransferenciaItemState{{
+		Insumo:               models.Insumo{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC", PrecoMedio: 30.5},
+		ApropriacoesOrigem:   []models.Apropriacao{{Codigo: "A001", Descricao: "Fundacao", BuildingUnitID: 3, SheetItemID: 15, Quantidade: 20}, originSelected},
+		ApropriacoesDestino:  []models.Apropriacao{{Codigo: "D001", Descricao: "Destino", BuildingUnitID: 7, SheetItemID: 17, Quantidade: 0}, destinationSelected},
+		QuantidadeTransferir: "10",
+	}}
+
+	if err := SetTransferItemOriginAppropriation(state, 0, AppropriationOptionLabel(originSelected)); err != nil {
+		t.Fatalf("SetTransferItemOriginAppropriation() error = %v", err)
+	}
+	if err := SetTransferItemDestinationAppropriation(state, 0, AppropriationOptionLabel(destinationSelected)); err != nil {
+		t.Fatalf("SetTransferItemDestinationAppropriation() error = %v", err)
+	}
+
+	transfer, err := BuildTransferenciaFromState(state)
+	if err != nil {
+		t.Fatalf("BuildTransferenciaFromState() error = %v", err)
+	}
+	item := transfer.Insumos[0]
+	if item.ApropriacaoOrigemBuildingUnitID != 4 || item.ApropriacaoOrigemSheetItemID != 16 || item.ApropriacaoDestinoBuildingUnitID != 8 || item.ApropriacaoDestinoSheetItemID != 18 {
+		t.Fatalf("transfer item IDs = %#v, want selected duplicate appropriation IDs", item)
+	}
+	if item.QuantidadeDisponivel != 30 {
+		t.Fatalf("QuantidadeDisponivel = %v, want selected origin quantity 30", item.QuantidadeDisponivel)
+	}
+}
+
 func TestBuildTransferenciaFromStateRejectsInvalidFields(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -284,9 +369,19 @@ func TestAppropriationHelpers(t *testing.T) {
 	if got := AppropriationLabels(appropriations); !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppropriationLabels() = %#v, want %#v", got, want)
 	}
+	appropriationsWithIDs := []models.Apropriacao{{Codigo: "A001", Descricao: "Fundacao", BuildingUnitID: 3, SheetItemID: 15}}
+	labelsWithIDs := AppropriationLabels(appropriationsWithIDs)
+	if !reflect.DeepEqual(labelsWithIDs, []string{"A001 - Fundacao | Unidade 3 | Item orcamento 15"}) {
+		t.Fatalf("AppropriationLabels() with IDs = %#v", labelsWithIDs)
+	}
 	withStock := AppropriationsWithStock(appropriations)
 	if len(withStock) != 1 || withStock[0].Codigo != "A001" {
 		t.Fatalf("AppropriationsWithStock() = %#v, want only A001", withStock)
+	}
+	blocked := []models.Apropriacao{{Codigo: "A001", Quantidade: 10, Bloqueado: true}, {Codigo: "A002", Quantidade: 10}}
+	available := AppropriationsWithStock(blocked)
+	if len(available) != 1 || available[0].Codigo != "A002" {
+		t.Fatalf("AppropriationsWithStock() = %#v, want blocked appropriation removed", available)
 	}
 	itemState := NewTransferenciaItemState(models.Insumo{ID: 1}, withStock, []models.Apropriacao{{Codigo: "D001", Descricao: "Destino", Quantidade: 5}})
 	if itemState.ApropriacaoOrigemSelecionada != "A001 - Fundacao" || itemState.ApropriacaoDestinoSelecionada != "D001 - Destino" {
@@ -310,6 +405,19 @@ func TestBuildTransferenciaTabReturnsObject(t *testing.T) {
 	state := NewAppState(testConfig())
 	if BuildTransferenciaTab(state) == nil {
 		t.Fatal("BuildTransferenciaTab() returned nil")
+	}
+}
+
+func TestBuildTransferenciaTabDoesNotRefreshWhileInitializingAppropriationSelects(t *testing.T) {
+	state := validTransferStateWithItem()
+	refreshes := 0
+	state.RefreshUI = func() { refreshes++ }
+
+	if BuildTransferenciaTab(state) == nil {
+		t.Fatal("BuildTransferenciaTab() returned nil")
+	}
+	if refreshes != 0 {
+		t.Fatalf("BuildTransferenciaTab() triggered %d refresh(es), want 0", refreshes)
 	}
 }
 

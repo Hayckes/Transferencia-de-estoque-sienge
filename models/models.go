@@ -36,6 +36,7 @@ type Apropriacao struct {
 	BuildingUnitID int     `json:"building_unit_id,omitempty"`
 	SheetItemID    int     `json:"sheet_item_id,omitempty"`
 	Quantidade     float64 `json:"quantidade"`
+	Bloqueado      bool    `json:"bloqueado,omitempty"`
 }
 
 type Insumo struct {

@@ -192,6 +192,21 @@ func TestParseAppropriationsSupportsSiengeStockFields(t *testing.T) {
 	}
 }
 
+func TestParseAppropriationsDetectsBlockedBudgetItems(t *testing.T) {
+	appropriations, err := parseAppropriations([]byte(`{
+		"results": [
+			{"buildingUnitId": 3, "sheetItemId": 15, "costEstimationItemReference": "08.004.001", "quantity": 12.3456, "isBlocked": true}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("parseAppropriations() error = %v", err)
+	}
+
+	if len(appropriations) != 1 || !appropriations[0].Bloqueado {
+		t.Fatalf("appropriations = %#v, want blocked appropriation", appropriations)
+	}
+}
+
 func TestGetBuildingAppropriationsRejectsInvalidIDs(t *testing.T) {
 	client := newTestClient(t, "https://example.com"+BasePath, nil)
 

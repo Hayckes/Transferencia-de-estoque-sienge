@@ -208,6 +208,28 @@ func TestAPIErrorSanitizesSensitiveJSONBody(t *testing.T) {
 	}
 }
 
+func TestAPIErrorUsesSiengeClientMessageForUnprocessableEntity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte("{\"clientMessage\":\"Item de or\\u00e7amento 15 est\\u00e1 bloqueado para apropria\\u00e7\\u00f5es.\",\"developerMessage\":\"est.message.item.de.orcamento.bloqueado\",\"status\":422}"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.PostJSON(context.Background(), "/stock-transfers", map[string]any{"ok": true})
+	if err == nil {
+		t.Fatal("PostJSON() error = nil, want error")
+	}
+
+	message := err.Error()
+	if !strings.Contains(message, "Item de or\u00e7amento 15 est\u00e1 bloqueado") || !strings.Contains(message, "Selecione outra apropriacao") {
+		t.Fatalf("error = %q, want friendly blocked item message", message)
+	}
+	if strings.Contains(message, "developerMessage") {
+		t.Fatalf("error = %q, should not expose raw JSON when clientMessage is available", message)
+	}
+}
+
 func TestPostJSONRejectsAbsoluteEndpoint(t *testing.T) {
 	client := newTestClient(t, "https://example.com"+BasePath, nil)
 	_, err := client.PostJSON(context.Background(), "https://example.com/stock-transfers", map[string]any{})

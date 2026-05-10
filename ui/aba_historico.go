@@ -24,7 +24,7 @@ func NewHistoricoTabState() HistoricoTabState {
 }
 
 func BuildHistoricoTab(state *AppState) fyne.CanvasObject {
-	status := widget.NewLabel(state.Historico.UltimoStatus)
+	status := NewStatusView(state.Window, state.Historico.UltimoStatus)
 	refreshButton := widget.NewButton("Atualizar", func() {
 		if err := RefreshHistorico(state); err != nil {
 			status.SetText(err.Error())
@@ -41,16 +41,16 @@ func BuildHistoricoTab(state *AppState) fyne.CanvasObject {
 	})
 
 	rows := make([]fyne.CanvasObject, 0, len(state.Historico.Resumos)+1)
-	rows = append(rows, widget.NewLabel("Data/Hora | ID Movimento | Solicitante | Origem | Destino | Itens | Total"))
+	rows = append(rows, selectableWrappedLabel("Data/Hora | ID Movimento | Solicitante | Origem | Destino | Itens | Total"))
 	for _, resumo := range state.Historico.Resumos {
-		rows = append(rows, widget.NewLabel(HistoricoResumoRow(resumo)))
+		rows = append(rows, selectableWrappedLabel(HistoricoResumoRow(resumo)))
 	}
 
-	return container.NewVBox(
+	return scrollablePage(
 		widget.NewLabel("Historico resumido"),
-		container.NewHBox(refreshButton, excelButton),
-		status,
-		container.NewVBox(rows...),
+		responsiveRow(refreshButton, excelButton),
+		status.Object(),
+		container.NewHScroll(container.NewVBox(rows...)),
 	)
 }
 

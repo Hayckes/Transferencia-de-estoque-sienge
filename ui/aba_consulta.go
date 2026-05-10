@@ -40,7 +40,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		state.Consulta.InsumoIDsInput = value
 	}
 
-	status := widget.NewLabel("")
+	status := NewStatusView(state.Window, "")
 	consultar := widget.NewButton("Consultar", func() {
 		status.SetText(StatusLoading)
 		state.Runner.Run(func() error {
@@ -59,11 +59,11 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 	})
 
 	resultRows := make([]fyne.CanvasObject, 0, len(state.Consulta.Resultados)+1)
-	resultRows = append(resultRows, widget.NewLabel("ID | Nome | Detalhe | Marca | Qtd. em Estoque"))
+	resultRows = append(resultRows, selectableWrappedLabel("ID | Nome | Detalhe | Marca | Qtd. em Estoque"))
 	for index, item := range state.Consulta.Resultados {
 		rowIndex := index
 		resultRows = append(resultRows, container.NewHBox(
-			widget.NewLabel(ConsultaResultRow(item)),
+			selectableWrappedLabel(ConsultaResultRow(item)),
 			widget.NewButton("Detalhes", func() {
 				status.SetText(StatusLoading)
 				state.Runner.Run(func() error {
@@ -94,11 +94,11 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		state.RefreshTab(TabConsulta)
 	})
 
-	return container.NewVBox(
+	return scrollablePage(
 		widget.NewLabel("Consulta de estoque"),
-		container.NewHBox(withMinTypingInputWidth(obraSelect), withMinTypingInputWidth(idsEntry), consultar, limpar),
-		status,
-		container.NewVBox(resultRows...),
+		responsiveRow(expandingInput(obraSelect), expandingInput(idsEntry), consultar, limpar),
+		status.Object(),
+		container.NewHScroll(container.NewVBox(resultRows...)),
 	)
 }
 

@@ -196,10 +196,20 @@ func (c *Client) endpoint(path string) (string, error) {
 }
 
 func newAPIError(statusCode int, body []byte) *APIError {
+	message := messageForStatus(statusCode)
+	clientMessage := extractClientMessage(body)
+	if clientMessage != "" {
+		message = messageWithClientDetail(statusCode, clientMessage)
+	}
+	bodyText := sanitizeBody(string(body))
+	if clientMessage != "" {
+		bodyText = ""
+	}
+
 	return &APIError{
 		StatusCode: statusCode,
-		Message:    messageForStatus(statusCode),
-		Body:       sanitizeBody(string(body)),
+		Message:    message,
+		Body:       bodyText,
 	}
 }
 
@@ -234,6 +244,37 @@ func sanitizeBody(body string) string {
 	}
 
 	return redactSensitiveWords(body)
+}
+
+func extractClientMessage(body []byte) string {
+	var data map[string]any
+	if json.Unmarshal(body, &data) != nil {
+		return ""
+	}
+
+	for _, key := range []string{"clientMessage", "userMessage"} {
+		if value, ok := data[key]; ok && value != nil {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" {
+				return text
+			}
+		}
+	}
+
+	return ""
+}
+
+func messageWithClientDetail(statusCode int, detail string) string {
+	detail = strings.TrimRight(strings.TrimSpace(detail), ".")
+	if statusCode == http.StatusUnprocessableEntity {
+		message := "O Sienge recusou a solicitacao: " + detail
+		if strings.Contains(strings.ToLower(detail), "bloquead") {
+			message += ". Selecione outra apropriacao ou desbloqueie o item no Sienge."
+		}
+		return message
+	}
+
+	return messageForStatus(statusCode) + ": " + detail
 }
 
 func sanitizeJSONValue(value any) any {

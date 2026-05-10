@@ -21,12 +21,12 @@ func ShowInsumoDetailsModal(window fyne.Window, item models.Insumo) {
 		return
 	}
 	rows := []fyne.CanvasObject{
-		widget.NewLabel(fmt.Sprintf("%s %s - %s", item.Nome, item.Detalhe, item.Marca)),
+		selectableWrappedLabel(fmt.Sprintf("%s %s - %s", item.Nome, item.Detalhe, item.Marca)),
 		widget.NewSeparator(),
-		widget.NewLabel("Codigo | Nome/Referencia | Quantidade"),
+		selectableWrappedLabel("Codigo | Nome/Referencia | Quantidade"),
 	}
 	for _, appropriation := range item.Apropriacoes {
-		rows = append(rows, widget.NewLabel(fmt.Sprintf("%s | %s | %s", appropriation.Codigo, appropriationDisplayName(appropriation), models.FormatQuantidade(appropriation.Quantidade, item.Unidade))))
+		rows = append(rows, selectableWrappedLabel(fmt.Sprintf("%s | %s | %s", appropriation.Codigo, appropriationDisplayName(appropriation), models.FormatQuantidade(appropriation.Quantidade, item.Unidade))))
 	}
 	content := container.NewVScroll(container.NewVBox(rows...))
 	d := dialog.NewCustom("Detalhes do insumo", "Fechar", content, window)
@@ -38,20 +38,35 @@ func ShowInsumoSelectionModal(window fyne.Window, options []models.Insumo, onSel
 	if window == nil || len(options) == 0 {
 		return
 	}
+	var d dialog.Dialog
+	selecting := false
+	buttons := make([]*widget.Button, 0, len(options))
 	rows := make([]fyne.CanvasObject, 0, len(options))
 	for _, option := range options {
 		selected := option
+		selectButton := widget.NewButton("Selecionar", func() {
+			if selecting {
+				return
+			}
+			selecting = true
+			for _, button := range buttons {
+				button.Disable()
+			}
+			if d != nil {
+				d.Hide()
+			}
+			if onSelect != nil {
+				onSelect(selected)
+			}
+		})
+		buttons = append(buttons, selectButton)
 		rows = append(rows, container.NewHBox(
-			widget.NewLabel(TransferItemLabel(option)),
-			widget.NewButton("Selecionar", func() {
-				if onSelect != nil {
-					onSelect(selected)
-				}
-			}),
+			selectableWrappedLabel(TransferItemLabel(option)),
+			selectButton,
 		))
 	}
 	content := container.NewVScroll(container.NewVBox(rows...))
-	d := dialog.NewCustom("Selecione o insumo", "Fechar", content, window)
+	d = dialog.NewCustom("Selecione o insumo", "Fechar", content, window)
 	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), insumoSelectionDialogWidthRatio, insumoSelectionDialogHeightRatio))
 	d.Show()
 }
@@ -63,11 +78,21 @@ func ShowConfirmTransferModal(window fyne.Window, transfer models.Transferencia,
 		}
 		return
 	}
-	dialog.ShowConfirm("Confirmar Transferencia", TransferSummaryText(transfer), func(confirm bool) {
+	summary := TransferSummaryText(transfer)
+	content := container.NewBorder(
+		nil,
+		widget.NewButton("Copiar resumo", func() { copyTextToClipboard(summary) }),
+		nil,
+		nil,
+		container.NewVScroll(selectableWrappedLabel(summary)),
+	)
+	d := dialog.NewCustomConfirm("Confirmar Transferencia", "Enviar", "Cancelar", content, func(confirm bool) {
 		if confirm && onConfirm != nil {
 			onConfirm()
 		}
 	}, window)
+	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), 0.55, 0.55))
+	d.Show()
 }
 
 func ShowConfirmRemoveObra(window fyne.Window, onConfirm func()) {
@@ -142,10 +167,10 @@ func ShowCredentialsReonboardingModal(state *AppState, status func(string)) {
 
 	content := container.NewVBox(
 		message,
-		widget.NewLabel("Nome da empresa"), withMinTypingInputWidth(empresa),
-		widget.NewLabel("Subdominio"), withMinTypingInputWidth(subdominio),
-		widget.NewLabel("Usuario API"), withMinTypingInputWidth(usuario),
-		widget.NewLabel("Senha API"), withMinTypingInputWidth(senha),
+		widget.NewLabel("Nome da empresa"), expandingInput(empresa),
+		widget.NewLabel("Subdominio"), expandingInput(subdominio),
+		widget.NewLabel("Usuario API"), expandingInput(usuario),
+		widget.NewLabel("Senha API"), expandingInput(senha),
 	)
 
 	d := dialog.NewCustomConfirm("Refazer Credenciais", "Salvar", "Cancelar", content, func(confirm bool) {

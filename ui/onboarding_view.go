@@ -15,7 +15,10 @@ import (
 )
 
 func BuildFatalErrorContent(message string) fyne.CanvasObject {
-	return container.NewCenter(widget.NewLabel(message))
+	label := widget.NewLabel(message)
+	label.Wrapping = fyne.TextWrapWord
+	label.Selectable = true
+	return container.NewVScroll(container.NewCenter(container.NewPadded(label)))
 }
 
 func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(configLoaded)) fyne.CanvasObject {
@@ -25,7 +28,7 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 	var obras []models.Obra
 	var costCenterService CostCenterService
 
-	status := widget.NewLabel("")
+	status := NewStatusView(window, "")
 	content := container.NewVBox()
 
 	var showStep1 func()
@@ -44,11 +47,11 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Credenciais Sienge"),
-			withMinTypingInputWidth(empresa),
-			withMinTypingInputWidth(subdominio),
-			withMinTypingInputWidth(usuario),
-			withMinTypingInputWidth(senha),
-			status,
+			expandingInput(empresa),
+			expandingInput(subdominio),
+			expandingInput(usuario),
+			expandingInput(senha),
+			status.Object(),
 			widget.NewButton("Validar e continuar", func() {
 				credentials = CredentialsInput{EmpresaNome: empresa.Text, Subdominio: subdominio.Text, APIUsuario: usuario.Text, APISenha: senha.Text}
 				empresaModel, err := ValidateCredentialsInput(credentials)
@@ -86,10 +89,10 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 		cargo.SetPlaceHolder("Cargo/Função")
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Usuario"),
-			withMinTypingInputWidth(nome),
-			withMinTypingInputWidth(cargo),
-			status,
-			container.NewHBox(
+			expandingInput(nome),
+			expandingInput(cargo),
+			status.Object(),
+			responsiveRow(
 				widget.NewButton("Voltar", showStep1),
 				widget.NewButton("Continuar", func() {
 					user = UserInput{Nome: nome.Text, Cargo: cargo.Text}
@@ -108,7 +111,7 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 	showStep3 = func() {
 		idEntry := widget.NewEntry()
 		idEntry.SetPlaceHolder("ID do centro de custo")
-		lista := widget.NewLabel(worksListText(obras))
+		lista := selectableWrappedLabel(worksListText(obras))
 		add := func() {
 			if costCenterService == nil {
 				status.SetText("servico de centro de custo nao configurado")
@@ -142,10 +145,10 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Obras"),
-			container.NewHBox(withMinTypingInputWidth(idEntry), widget.NewButton("+ Adicionar outra obra", add)),
+			responsiveRow(expandingInput(idEntry), widget.NewButton("+ Adicionar outra obra", add)),
 			lista,
-			status,
-			container.NewHBox(
+			status.Object(),
+			responsiveRow(
 				widget.NewButton("Voltar", showStep2),
 				widget.NewButton("Concluir", func() {
 					cfg, err := service.Complete(context.Background(), CompleteOnboardingInput{Credentials: credentials, User: user, Works: WorksInput{Obras: obras}})
@@ -163,7 +166,7 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 	}
 
 	showStep1()
-	return container.NewCenter(container.NewPadded(content))
+	return container.NewVScroll(container.NewCenter(container.NewPadded(content)))
 }
 
 func worksListText(obras []models.Obra) string {

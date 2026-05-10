@@ -118,6 +118,7 @@ func parseAppropriations(body []byte) ([]models.Apropriacao, error) {
 		quantity, _ := getFloat(object, "quantity", "availableQuantity", "balance", "stockQuantity")
 		buildingUnitID, _ := getInt(object, "buildingUnitId", "buildingUnitID", "unitId")
 		sheetItemID, _ := getInt(object, "sheetItemId", "sheetItemID", "itemId")
+		blocked, _ := getBool(object, "blocked", "locked", "isBlocked", "isLocked", "bloqueado", "blockedForAppropriation", "blockedForAppropriations", "budgetItemBlocked", "isBudgetItemBlocked")
 		reference := getString(object, "costEstimationItemReference", "reference")
 		code := getString(object, "appropriationCode", "buildingAppropriationCode", "costEstimationItemReference", "code", "id")
 		if code == "" && sheetItemID > 0 {
@@ -134,6 +135,7 @@ func parseAppropriations(body []byte) ([]models.Apropriacao, error) {
 			BuildingUnitID: buildingUnitID,
 			SheetItemID:    sheetItemID,
 			Quantidade:     quantity,
+			Bloqueado:      blocked,
 		})
 	}
 
@@ -251,6 +253,34 @@ func getFloat(object map[string]any, keys ...string) (float64, bool) {
 	}
 
 	return 0, false
+}
+
+func getBool(object map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok || value == nil {
+			continue
+		}
+
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+			if err == nil {
+				return parsed, true
+			}
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err == nil {
+				return parsed != 0, true
+			}
+		case float64:
+			return typed != 0, true
+		}
+	}
+
+	return false, false
 }
 
 func valueToString(value any) string {

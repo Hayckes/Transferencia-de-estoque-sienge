@@ -60,7 +60,7 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 		state.Obras.NovoCentroCustoID = filtered
 	}
 
-	status := widget.NewLabel(state.Obras.Status)
+	status := NewStatusView(state.Window, state.Obras.Status)
 	buscarButton := widget.NewButton("Buscar", func() {
 		setObrasStatus(state, status, StatusLoading)
 		state.Runner.Run(func() error {
@@ -89,7 +89,7 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 	items = append(items,
 		widget.NewLabel(fmt.Sprintf("Usuario: %s", state.Obras.UsuarioNome)),
 		widget.NewLabel(fmt.Sprintf("Cargo: %s", state.Obras.UsuarioCargo)),
-		container.NewHBox(withMinTypingInputWidth(idEntry), buscarButton),
+		responsiveRow(expandingInput(idEntry), buscarButton),
 	)
 	if len(state.Obras.CentrosCustoEncontrados) > 1 {
 		centroCustoSelect := widget.NewSelect(ObraLabels(state.Obras.CentrosCustoEncontrados), func(value string) {
@@ -97,8 +97,8 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 		})
 		centroCustoSelect.PlaceHolder = "Selecione o centro de custo"
 		centroCustoSelect.SetSelected(state.Obras.CentroCustoSelecionado)
-		items = append(items, container.NewHBox(
-			withMinTypingInputWidth(centroCustoSelect),
+		items = append(items, responsiveRow(
+			expandingInput(centroCustoSelect),
 			widget.NewButton("Adicionar selecionado", func() {
 				if err := AddSelectedCostCenterFromLabel(state, state.Obras.CentroCustoSelecionado); err != nil {
 					setObrasStatus(state, status, err.Error())
@@ -109,7 +109,7 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 			}),
 		))
 	}
-	items = append(items, status)
+	items = append(items, status.Object())
 	for _, obra := range state.Obras.Obras {
 		obraID := obra.ID
 		items = append(items, container.NewHBox(
@@ -132,7 +132,7 @@ func BuildObrasTab(state *AppState) fyne.CanvasObject {
 		))
 	}
 
-	return container.NewVBox(items...)
+	return scrollablePage(items...)
 }
 
 func SearchAndAddCostCenterFromInput(ctx context.Context, state *AppState, idInput string) error {
@@ -293,7 +293,7 @@ func parseCostCenterID(input string) (int, error) {
 	return id, nil
 }
 
-func setObrasStatus(state *AppState, label *widget.Label, message string) {
+func setObrasStatus(state *AppState, label interface{ SetText(string) }, message string) {
 	state.Obras.Status = message
 	label.SetText(message)
 }

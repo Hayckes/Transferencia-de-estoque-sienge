@@ -18,6 +18,36 @@ func withMinTypingInputWidth(input fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewGridWrap(minTypingInputSize(input), input)
 }
 
+func withMinObjectWidth(input fyne.CanvasObject, minWidth float32) fyne.CanvasObject {
+	size := input.MinSize()
+	if size.Width < minWidth {
+		size.Width = minWidth
+	}
+	return container.NewGridWrap(size, input)
+}
+
+func scrollablePage(objects ...fyne.CanvasObject) fyne.CanvasObject {
+	return container.NewVScroll(container.NewPadded(container.NewVBox(objects...)))
+}
+
+func responsiveRow(objects ...fyne.CanvasObject) fyne.CanvasObject {
+	if len(objects) == 0 {
+		return container.NewHBox()
+	}
+	return container.NewAdaptiveGrid(len(objects), objects...)
+}
+
+func expandingInput(input fyne.CanvasObject) fyne.CanvasObject {
+	return container.NewBorder(nil, nil, nil, nil, input)
+}
+
+func selectableWrappedLabel(text string) *widget.Label {
+	label := widget.NewLabel(text)
+	label.Wrapping = fyne.TextWrapWord
+	label.Selectable = true
+	return label
+}
+
 func minTypingInputSize(input fyne.CanvasObject) fyne.Size {
 	size := input.MinSize()
 	if size.Width < minTypingInputWidth {

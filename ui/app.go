@@ -88,11 +88,11 @@ func NewAppState(cfg models.Config) *AppState {
 }
 
 func BuildMainContent(state *AppState) fyne.CanvasObject {
-	statusLabel := widget.NewLabel(state.Status)
+	status := NewStatusView(state.Window, state.Status)
 
 	return container.NewBorder(
 		BuildTopBar(state.Config),
-		container.NewBorder(nil, nil, widget.NewLabel("Status:"), nil, statusLabel),
+		status.Object(),
 		nil,
 		nil,
 		BuildMainTabs(state),
@@ -144,5 +144,5 @@ func BuildTopBar(cfg models.Config) fyne.CanvasObject {
 	usuario := widget.NewLabel(fmt.Sprintf("Usuario: %s", cfg.Usuario.Nome))
 	cargo := widget.NewLabel(fmt.Sprintf("Cargo: %s", cfg.Usuario.Cargo))
 
-	return container.NewHBox(empresa, widget.NewSeparator(), usuario, widget.NewSeparator(), cargo)
+	return container.NewHScroll(container.NewHBox(empresa, widget.NewSeparator(), usuario, widget.NewSeparator(), cargo))
 }

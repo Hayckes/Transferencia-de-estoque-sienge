@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"fyne.io/fyne/v2"
 	fynetest "fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -141,6 +142,24 @@ func TestStatusMessageForError(t *testing.T) {
 				t.Fatalf("StatusMessageForError() = %q, want prefix %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStatusViewUsesSelectableWrappedMessageAndActions(t *testing.T) {
+	status := NewStatusView(nil, "")
+	if !status.label.Selectable || status.label.Wrapping != fyne.TextWrapWord {
+		t.Fatalf("status label selectable/wrapping = %v/%v, want selectable word wrap", status.label.Selectable, status.label.Wrapping)
+	}
+	if !status.copyButton.Disabled() || !status.detailsButton.Disabled() {
+		t.Fatal("empty status should disable copy/details actions")
+	}
+
+	status.SetText("Erro detalhado para copiar")
+	if status.copyButton.Disabled() {
+		t.Fatal("non-empty status should enable copy action")
+	}
+	if !status.detailsButton.Disabled() {
+		t.Fatal("details action should stay disabled without a window")
 	}
 }
 
