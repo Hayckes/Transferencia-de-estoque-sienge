@@ -148,7 +148,7 @@ func TestGetStockItemsRejectsInvalidCostCenter(t *testing.T) {
 
 func TestGetBuildingAppropriationsCallsEndpointAndParsesItems(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.String() != "/public/api/v1/stock-inventories/121/items/3421/building-appropriation" {
+		if r.URL.Path != "/public/api/v1/stock-inventories/121/items/3421/building-appropriation" || r.URL.Query().Get("offset") != "0" || r.URL.Query().Get("limit") != "100" {
 			t.Fatalf("URL = %s, want appropriation endpoint", r.URL.String())
 		}
 

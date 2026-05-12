@@ -38,6 +38,9 @@ type TransferenciaItemState struct {
 	ApropriacaoDestinoSelecionada string
 	QuantidadeDisponivel          float64
 	QuantidadeTransferir          string
+	EstoqueOrigemAntes            float64
+	EstoqueDestinoAntes           float64
+	StockPresenceFeedback         string
 }
 
 func (item TransferenciaItemState) selectedOriginAppropriation() models.Apropriacao {
@@ -142,7 +145,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 							}
 							AddPreparedTransferInsumo(state, selectedItemState)
 							insumoEntry.SetText("")
-							status.SetText("Insumo adicionado.")
+							status.SetText(TransferInsumoAddedFeedback(selectedItemState))
 							state.RefreshTab(TabTransferencia)
 						})
 					})
@@ -157,7 +160,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 			}
 			AddPreparedTransferInsumo(state, itemState)
 			insumoEntry.SetText("")
-			status.SetText("Insumo adicionado.")
+			status.SetText(TransferInsumoAddedFeedback(itemState))
 			state.RefreshTab(TabTransferencia)
 		})
 	})
@@ -171,20 +174,39 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		}
 		ShowConfirmTransferModal(state.Window, transfer, func() {
 			status.SetText(StatusLoading)
+			movementID := ""
 			state.Runner.Run(func() error {
-				_, err := SendTransferencia(context.Background(), state)
+				var err error
+				movementID, err = SendTransferencia(context.Background(), state)
 				return err
 			}, func(err error) {
 				if err != nil {
 					if MaybeShowCredentialReonboarding(state, err, status.SetText) {
 						return
 					}
-					status.SetText(err.Error())
+					status.SetText("Erro ao enviar transferencia: " + err.Error())
 					return
 				}
-				status.SetText("Transferencia enviada com sucesso.")
+				status.SetText(TransferSuccessFeedback(movementID))
 				state.RefreshTab(TabTransferencia)
 			})
+		})
+	})
+
+	recalculateButton := widget.NewButton("Recalcular saldos", func() {
+		status.SetText(StatusLoading)
+		state.Runner.Run(func() error {
+			return RecalculateTransferSaldos(context.Background(), state)
+		}, func(err error) {
+			if err != nil {
+				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+					return
+				}
+				status.SetText(err.Error())
+				return
+			}
+			status.SetText("Saldos recalculados.")
+			state.RefreshTab(TabTransferencia)
 		})
 	})
 
@@ -197,6 +219,10 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		originAppropriationSelect.SetSelected(item.ApropriacaoOrigemSelecionada)
 		availableLabel := widget.NewLabel(models.FormatQuantidade(item.QuantidadeDisponivel, item.Insumo.Unidade))
 		originAppropriationSelect.OnChanged = func(value string) {
+			if value == "Nao se aplica" {
+				status.SetText(NoAppropriationsFeedback(true))
+				return
+			}
 			if rowIndex < 0 || rowIndex >= len(state.Transferencia.Itens) || value == state.Transferencia.Itens[rowIndex].ApropriacaoOrigemSelecionada {
 				return
 			}
@@ -208,6 +234,10 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		destinationAppropriationSelect.PlaceHolder = "Apropriacao destino"
 		destinationAppropriationSelect.SetSelected(item.ApropriacaoDestinoSelecionada)
 		destinationAppropriationSelect.OnChanged = func(value string) {
+			if value == "Nao se aplica" {
+				status.SetText(NoAppropriationsFeedback(false))
+				return
+			}
 			if rowIndex < 0 || rowIndex >= len(state.Transferencia.Itens) || value == state.Transferencia.Itens[rowIndex].ApropriacaoDestinoSelecionada {
 				return
 			}
@@ -216,21 +246,32 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		quantityEntry := widget.NewEntry()
 		quantityEntry.SetPlaceHolder("Qtd.")
 		quantityEntry.SetText(item.QuantidadeTransferir)
-		quantityEntry.OnChanged = func(value string) {
-			state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value
+		quantityEntry.OnChanged = func(value string) { state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value }
+		quantityEntry.OnSubmitted = func(value string) {
+			formatted, _, err := NormalizeQuantityInput(value)
+			if err != nil {
+				status.SetText("Quantidade invalida.")
+				return
+			}
+			quantityEntry.SetText(formatted)
+			state.Transferencia.Itens[rowIndex].QuantidadeTransferir = formatted
+			status.SetText("Quantidade atualizada. Confira os saldos recalculados.")
 		}
 		removeButton := widget.NewButton("Remover", func() {
 			_ = RemoveTransferItem(state, rowIndex)
 			status.SetText("Insumo removido.")
 			state.RefreshTab(TabTransferencia)
 		})
-		rows = append(rows, container.NewHBox(
-			withMinObjectWidth(widget.NewLabel(TransferItemLabel(item.Insumo)), 280),
-			withMinObjectWidth(originAppropriationSelect, 340),
-			withMinObjectWidth(destinationAppropriationSelect, 340),
-			withMinObjectWidth(availableLabel, 120),
-			withMinObjectWidth(quantityEntry, 120),
-			removeButton,
+		rows = append(rows, container.NewVBox(
+			container.NewHBox(
+				withMinObjectWidth(widget.NewLabel(TransferItemLabel(item.Insumo)), 280),
+				withMinObjectWidth(originAppropriationSelect, 340),
+				withMinObjectWidth(destinationAppropriationSelect, 340),
+				withMinObjectWidth(availableLabel, 120),
+				withMinObjectWidth(quantityEntry, 120),
+				removeButton,
+			),
+			BuildTransferItemSummaryObject(item),
 		))
 	}
 
@@ -248,7 +289,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 
 	workRow := container.NewGridWithColumns(2, origemSelect, destinoSelect)
 	requesterRow := container.NewBorder(nil, nil, nil, container.NewHBox(widget.NewLabel("Documento: TR"), withMinObjectWidth(movimentoEntry, 180)), solicitanteEntry)
-	itemInputRow := container.NewBorder(nil, nil, nil, container.NewHBox(addButton, sendButton, clearButton), insumoEntry)
+	itemInputRow := container.NewBorder(nil, nil, nil, container.NewHBox(addButton, recalculateButton, sendButton, clearButton), insumoEntry)
 
 	return scrollablePage(
 		widget.NewLabel("Transferencia de insumos"),
@@ -321,7 +362,7 @@ func LoadTransferInsumo(ctx context.Context, state *AppState, supplyID int) (Tra
 		return TransferenciaItemState{}, err
 	}
 	if len(items) == 0 {
-		return TransferenciaItemState{}, errors.New("insumo nao encontrado na obra de origem")
+		return TransferenciaItemState{}, errors.New(BuildStockPresenceFeedback(false, false))
 	}
 	if len(items) > 1 {
 		return TransferenciaItemState{}, &MultipleInsumosError{Options: items}
@@ -352,18 +393,25 @@ func LoadSelectedTransferInsumo(ctx context.Context, state *AppState, item model
 		return TransferenciaItemState{}, err
 	}
 
-	appropriations, err := state.Stock.GetBuildingAppropriations(ctx, originID, item.ID)
+	appropriations, err := state.Stock.GetStockAppropriationsWithDescriptionsForItem(ctx, originID, item)
 	if err != nil {
 		return TransferenciaItemState{}, err
 	}
-	destinationAppropriations, err := state.Stock.GetBuildingAppropriations(ctx, destinationID, item.ID)
+	destinationAppropriations, err := state.Stock.GetStockAppropriationsWithDescriptionsForItem(ctx, destinationID, item)
 	if err != nil {
 		return TransferenciaItemState{}, err
 	}
+	destinationItems, err := state.Stock.GetStockItemsByIDs(ctx, destinationID, []int{item.ID})
+	if err != nil {
+		return TransferenciaItemState{}, err
+	}
+	destinationStock := matchingStockQuantity(destinationItems, item)
 	originAppropriations := AppropriationsWithStock(appropriations)
 	destinationAppropriations = AppropriationsAvailableForTransfer(destinationAppropriations)
 	item.Apropriacoes = append([]models.Apropriacao(nil), originAppropriations...)
-	return NewTransferenciaItemState(item, originAppropriations, destinationAppropriations), nil
+	itemState := NewTransferenciaItemStateWithDestinationStock(item, originAppropriations, destinationAppropriations, destinationStock)
+	itemState.StockPresenceFeedback = BuildStockPresenceFeedback(true, len(destinationItems) > 0)
+	return itemState, nil
 }
 
 func AddPreparedTransferInsumo(state *AppState, itemState TransferenciaItemState) {
@@ -372,10 +420,16 @@ func AddPreparedTransferInsumo(state *AppState, itemState TransferenciaItemState
 }
 
 func NewTransferenciaItemState(item models.Insumo, originAppropriations, destinationAppropriations []models.Apropriacao) TransferenciaItemState {
+	return NewTransferenciaItemStateWithDestinationStock(item, originAppropriations, destinationAppropriations, 0)
+}
+
+func NewTransferenciaItemStateWithDestinationStock(item models.Insumo, originAppropriations, destinationAppropriations []models.Apropriacao, destinationStock float64) TransferenciaItemState {
 	itemState := TransferenciaItemState{
 		Insumo:              item,
 		ApropriacoesOrigem:  append([]models.Apropriacao(nil), originAppropriations...),
 		ApropriacoesDestino: append([]models.Apropriacao(nil), destinationAppropriations...),
+		EstoqueOrigemAntes:  item.Quantidade,
+		EstoqueDestinoAntes: destinationStock,
 	}
 	if len(itemState.ApropriacoesOrigem) == 1 {
 		appropriation := itemState.ApropriacoesOrigem[0]
@@ -387,6 +441,22 @@ func NewTransferenciaItemState(item models.Insumo, originAppropriations, destina
 	}
 
 	return itemState
+}
+
+func matchingStockQuantity(items []models.Insumo, selected models.Insumo) float64 {
+	for _, item := range items {
+		if item.ID != selected.ID {
+			continue
+		}
+		if selected.DetalheID > 0 && item.DetalheID > 0 && selected.DetalheID != item.DetalheID {
+			continue
+		}
+		if selected.MarcaID > 0 && item.MarcaID > 0 && selected.MarcaID != item.MarcaID {
+			continue
+		}
+		return item.Quantidade
+	}
+	return 0
 }
 
 func AppropriationsWithStock(appropriations []models.Apropriacao) []models.Apropriacao {
@@ -475,6 +545,9 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 		if err != nil {
 			return models.Transferencia{}, fmt.Errorf("insumo %d: %w", index+1, err)
 		}
+		if item.QuantidadeDisponivel > 0 && quantity > item.QuantidadeDisponivel {
+			return models.Transferencia{}, fmt.Errorf("insumo %d: quantidade a transferir maior que a disponivel", index+1)
+		}
 		originAppropriation := item.selectedOriginAppropriation()
 		destinationAppropriation := item.selectedDestinationAppropriation()
 		if originAppropriation.Bloqueado {
@@ -500,9 +573,14 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 			ApropriacaoDestinoDescricao:      AppropriationDescription(destinationAppropriation),
 			ApropriacaoDestinoBuildingUnitID: destinationAppropriation.BuildingUnitID,
 			ApropriacaoDestinoSheetItemID:    destinationAppropriation.SheetItemID,
+			ApropriacaoOrigemObrigatoria:     len(item.ApropriacoesOrigem) > 0,
+			ApropriacaoDestinoObrigatoria:    len(item.ApropriacoesDestino) > 0,
 			Quantidade:                       quantity,
 			QuantidadeDisponivel:             item.QuantidadeDisponivel,
 		})
+		if err := applyTransferSnapshot(&items[len(items)-1], item, originAppropriation, destinationAppropriation); err != nil {
+			return models.Transferencia{}, fmt.Errorf("insumo %d: %w", index+1, err)
+		}
 	}
 
 	transfer := models.Transferencia{
@@ -545,10 +623,10 @@ func ValidateTransferenciaRequiredFields(transfer models.Transferencia) []string
 	}
 	for index, item := range transfer.Insumos {
 		prefix := fmt.Sprintf("insumo %d", index+1)
-		if strings.TrimSpace(item.Apropriacao) == "" {
+		if item.ApropriacaoOrigemObrigatoria && strings.TrimSpace(item.Apropriacao) == "" {
 			validationErrors = append(validationErrors, prefix+": apropriacao de origem obrigatoria")
 		}
-		if strings.TrimSpace(item.ApropriacaoDestino) == "" {
+		if item.ApropriacaoDestinoObrigatoria && strings.TrimSpace(item.ApropriacaoDestino) == "" {
 			validationErrors = append(validationErrors, prefix+": apropriacao de destino obrigatoria")
 		}
 		if item.Quantidade <= 0 {
@@ -560,6 +638,59 @@ func ValidateTransferenciaRequiredFields(transfer models.Transferencia) []string
 	}
 
 	return validationErrors
+}
+
+func applyTransferSnapshot(item *models.ItemTransferido, stateItem TransferenciaItemState, originAppropriation models.Apropriacao, destinationAppropriation models.Apropriacao) error {
+	originStock := stateItem.EstoqueOrigemAntes
+	if originStock == 0 {
+		originStock = stateItem.Insumo.Quantidade
+	}
+	if originStock == 0 {
+		originStock = stateItem.QuantidadeDisponivel
+	}
+	var originAppropriationStock *float64
+	if hasAppropriation(originAppropriation) {
+		value := originAppropriation.Quantidade
+		originAppropriationStock = &value
+	}
+	var destinationAppropriationStock *float64
+	if hasAppropriation(destinationAppropriation) {
+		value := destinationAppropriation.Quantidade
+		destinationAppropriationStock = &value
+	}
+
+	snapshot, err := models.CalculateTransferStockSnapshot(models.TransferStockSnapshotInput{
+		EstoqueOrigemAntes:      originStock,
+		EstoqueDestinoAntes:     stateItem.EstoqueDestinoAntes,
+		ApropriacaoOrigemAntes:  originAppropriationStock,
+		ApropriacaoDestinoAntes: destinationAppropriationStock,
+		Quantidade:              item.Quantidade,
+	})
+	if err != nil {
+		return err
+	}
+
+	item.QuantidadeEstoqueOrigemAntes = snapshot.EstoqueOrigemAntes
+	item.QuantidadeEstoqueOrigemDepois = snapshot.EstoqueOrigemDepois
+	item.QuantidadeEstoqueDestinoAntes = snapshot.EstoqueDestinoAntes
+	item.QuantidadeEstoqueDestinoDepois = snapshot.EstoqueDestinoDepois
+	item.QuantidadeApropriacaoOrigemAntes = snapshot.ApropriacaoOrigemAntes
+	item.QuantidadeApropriacaoOrigemDepois = snapshot.ApropriacaoOrigemDepois
+	item.QuantidadeApropriacaoDestinoAntes = snapshot.ApropriacaoDestinoAntes
+	item.QuantidadeApropriacaoDestinoDepois = snapshot.ApropriacaoDestinoDepois
+	item.QuantidadeEnviada = snapshot.QuantidadeEnviada
+	item.QuantidadeRecebida = snapshot.QuantidadeRecebida
+	item.ApropriacaoOrigemCodigo = originAppropriation.Codigo
+	item.ApropriacaoOrigemDescricao = models.AppropriationDescription(originAppropriation)
+	item.ApropriacaoOrigemLabel = models.AppropriationLabel(originAppropriation)
+	item.ApropriacaoDestinoCodigo = destinationAppropriation.Codigo
+	item.ApropriacaoDestinoDescricaoSnapshot = models.AppropriationDescription(destinationAppropriation)
+	item.ApropriacaoDestinoLabel = models.AppropriationLabel(destinationAppropriation)
+	return nil
+}
+
+func hasAppropriation(appropriation models.Apropriacao) bool {
+	return strings.TrimSpace(appropriation.Codigo) != "" || appropriation.BuildingUnitID > 0 || appropriation.SheetItemID > 0
 }
 
 func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
@@ -574,16 +705,23 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := RevalidateTransferBeforeSend(ctx, state, transfer); err != nil {
+		return "", err
+	}
+	transfer, err = BuildTransferenciaFromState(state)
+	if err != nil {
+		return "", err
+	}
 	movementID, err := state.Transfer.CreateStockTransfer(ctx, transfer)
 	if err != nil {
 		return "", err
 	}
 	transfer.IDMovimento = movementID
 	if err := state.TransferStore.AppendHistory(transfer); err != nil {
-		return "", err
+		return "", errors.New(TransferLocalHistoryErrorFeedback(err))
 	}
 	if err := state.TransferStore.AppendTransferToExcel(transfer); err != nil {
-		return "", err
+		return "", errors.New("Transferencia enviada com sucesso no Sienge, mas houve erro ao salvar a planilha local: " + err.Error())
 	}
 	if state.HistoryStore != nil {
 		_ = RefreshHistorico(state)
@@ -591,6 +729,78 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 
 	ClearTransferencia(state)
 	return movementID, nil
+}
+
+func RecalculateTransferSaldos(ctx context.Context, state *AppState) error {
+	if state.Stock == nil {
+		return errors.New("servico de estoque nao configurado")
+	}
+	originID, err := TransferOriginID(state)
+	if err != nil {
+		return err
+	}
+	destinationID, err := TransferDestinationID(state)
+	if err != nil {
+		return err
+	}
+	for index := range state.Transferencia.Itens {
+		item := &state.Transferencia.Itens[index]
+		originItems, err := state.Stock.GetStockItemsByIDs(ctx, originID, []int{item.Insumo.ID})
+		if err != nil {
+			return err
+		}
+		if stock := matchingStockQuantity(originItems, item.Insumo); stock > 0 {
+			item.EstoqueOrigemAntes = stock
+			item.Insumo.Quantidade = stock
+		}
+		destinationItems, err := state.Stock.GetStockItemsByIDs(ctx, destinationID, []int{item.Insumo.ID})
+		if err != nil {
+			return err
+		}
+		item.EstoqueDestinoAntes = matchingStockQuantity(destinationItems, item.Insumo)
+
+		originAppropriations, err := state.Stock.GetStockAppropriationsWithDescriptionsForItem(ctx, originID, item.Insumo)
+		if err != nil {
+			return err
+		}
+		destinationAppropriations, err := state.Stock.GetStockAppropriationsWithDescriptionsForItem(ctx, destinationID, item.Insumo)
+		if err != nil {
+			return err
+		}
+		item.ApropriacoesOrigem = AppropriationsWithStock(originAppropriations)
+		item.ApropriacoesDestino = AppropriationsAvailableForTransfer(destinationAppropriations)
+		if item.ApropriacaoOrigemSelecionada != "" {
+			_ = SetTransferItemOriginAppropriation(state, index, item.ApropriacaoOrigemSelecionada)
+		}
+		if item.ApropriacaoDestinoSelecionada != "" {
+			_ = SetTransferItemDestinationAppropriation(state, index, item.ApropriacaoDestinoSelecionada)
+		}
+	}
+	return nil
+}
+
+func RevalidateTransferBeforeSend(ctx context.Context, state *AppState, transfer models.Transferencia) error {
+	if state.Stock == nil || len(state.Transferencia.Itens) != len(transfer.Insumos) {
+		return nil
+	}
+	previousOrigin := make([]float64, len(state.Transferencia.Itens))
+	previousDestination := make([]float64, len(state.Transferencia.Itens))
+	for index, item := range state.Transferencia.Itens {
+		previousOrigin[index] = item.EstoqueOrigemAntes
+		previousDestination[index] = item.EstoqueDestinoAntes
+	}
+	if err := RecalculateTransferSaldos(ctx, state); err != nil {
+		return err
+	}
+	for index, item := range state.Transferencia.Itens {
+		if previousOrigin[index] != 0 && previousOrigin[index] != item.EstoqueOrigemAntes {
+			return errors.New("o estoque foi alterado desde a ultima consulta. Revise os saldos antes de enviar a transferencia")
+		}
+		if previousDestination[index] != item.EstoqueDestinoAntes {
+			return errors.New("o estoque foi alterado desde a ultima consulta. Revise os saldos antes de enviar a transferencia")
+		}
+	}
+	return nil
 }
 
 func TransferOriginID(state *AppState) (int, error) {
@@ -649,6 +859,9 @@ func TransferItemLabel(item models.Insumo) string {
 }
 
 func AppropriationLabels(appropriations []models.Apropriacao) []string {
+	if len(appropriations) == 0 {
+		return []string{"Nao se aplica"}
+	}
 	labels := make([]string, 0, len(appropriations))
 	for _, appropriation := range appropriations {
 		labels = append(labels, AppropriationOptionLabel(appropriation))
@@ -706,6 +919,106 @@ func SplitAppropriationLabel(label string) (string, string) {
 	}
 
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func BuildTransferItemSummary(item TransferenciaItemState) string {
+	quantity, _ := ParseQuantidadeTransferir(item.QuantidadeTransferir)
+	balances := transferItemBalances(item, quantity)
+	originAppropriation := item.selectedOriginAppropriation()
+	destinationAppropriation := item.selectedDestinationAppropriation()
+
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("Estoque origem atual: %s | ", models.FormatQuantidade(balances.OriginCurrentStock, item.Insumo.Unidade)))
+	builder.WriteString(fmt.Sprintf("Quantidade enviada: %s | ", models.FormatQuantidade(quantity, item.Insumo.Unidade)))
+	builder.WriteString(fmt.Sprintf("Saldo origem apos transferencia: %s\n", models.FormatQuantidade(balances.OriginAfterTransfer, item.Insumo.Unidade)))
+	builder.WriteString(fmt.Sprintf("Estoque destino atual: %s | ", models.FormatQuantidade(balances.DestinationCurrentStock, item.Insumo.Unidade)))
+	builder.WriteString(fmt.Sprintf("Quantidade recebida: %s | ", models.FormatQuantidade(quantity, item.Insumo.Unidade)))
+	builder.WriteString(fmt.Sprintf("Saldo destino apos transferencia: %s\n", models.FormatQuantidade(balances.DestinationAfterTransfer, item.Insumo.Unidade)))
+	builder.WriteString("Apropriacao origem: ")
+	if hasAppropriation(originAppropriation) {
+		builder.WriteString(models.AppropriationLabel(originAppropriation))
+		builder.WriteString(fmt.Sprintf(" | Saldo: %s | Apos: %s", models.FormatQuantidade(originAppropriation.Quantidade, item.Insumo.Unidade), models.FormatQuantidade(originAppropriation.Quantidade-quantity, item.Insumo.Unidade)))
+	} else {
+		builder.WriteString("Nao se aplica")
+	}
+	builder.WriteString("\nApropriacao destino: ")
+	if hasAppropriation(destinationAppropriation) {
+		builder.WriteString(models.AppropriationLabel(destinationAppropriation))
+		builder.WriteString(fmt.Sprintf(" | Saldo: %s | Apos: %s", models.FormatQuantidade(destinationAppropriation.Quantidade, item.Insumo.Unidade), models.FormatQuantidade(destinationAppropriation.Quantidade+quantity, item.Insumo.Unidade)))
+	} else {
+		builder.WriteString("Nao se aplica")
+	}
+	return builder.String()
+}
+
+func BuildTransferItemSummaryObject(item TransferenciaItemState) fyne.CanvasObject {
+	quantity, _ := ParseQuantidadeTransferir(item.QuantidadeTransferir)
+	balances := transferItemBalances(item, quantity)
+	originAppropriation := item.selectedOriginAppropriation()
+	destinationAppropriation := item.selectedDestinationAppropriation()
+	return container.NewVBox(
+		NewKeyValueLine("Estoque atual de origem", models.FormatQuantidade(balances.OriginCurrentStock, item.Insumo.Unidade)),
+		NewKeyValueLine("Quantidade a transferir", models.FormatQuantidade(quantity, item.Insumo.Unidade)),
+		NewKeyValueLine("Saldo de origem apos transferencia", models.FormatQuantidade(balances.OriginAfterTransfer, item.Insumo.Unidade)),
+		NewKeyValueLine("Estoque atual de destino", models.FormatQuantidade(balances.DestinationCurrentStock, item.Insumo.Unidade)),
+		NewKeyValueLine("Saldo de destino apos transferencia", models.FormatQuantidade(balances.DestinationAfterTransfer, item.Insumo.Unidade)),
+		NewKeyValueLine("Apropriacao de origem", appropriationSummaryText(originAppropriation, true)),
+		NewKeyValueLine("Apropriacao de destino", appropriationSummaryText(destinationAppropriation, false)),
+	)
+}
+
+func transferItemBalances(item TransferenciaItemState, quantity float64) models.TransferBalanceOutput {
+	var originAppropriationStock *float64
+	if origin := item.selectedOriginAppropriation(); hasAppropriation(origin) {
+		value := origin.Quantidade
+		originAppropriationStock = &value
+	}
+	var destinationAppropriationStock *float64
+	if destination := item.selectedDestinationAppropriation(); hasAppropriation(destination) {
+		value := destination.Quantidade
+		destinationAppropriationStock = &value
+	}
+	balances, err := models.CalculateTransferBalances(models.TransferBalanceInput{OriginTotalStock: item.EstoqueOrigemAntes, DestinationTotalStock: item.EstoqueDestinoAntes, OriginAppropriationStock: originAppropriationStock, DestinationAppropriationStock: destinationAppropriationStock, QuantityToTransfer: quantity})
+	if err != nil {
+		return models.TransferBalanceOutput{OriginCurrentStock: item.EstoqueOrigemAntes, DestinationCurrentStock: item.EstoqueDestinoAntes, OriginAfterTransfer: item.EstoqueOrigemAntes - quantity, DestinationAfterTransfer: item.EstoqueDestinoAntes + quantity}
+	}
+	return balances
+}
+
+func appropriationSummaryText(appropriation models.Apropriacao, origin bool) string {
+	if hasAppropriation(appropriation) {
+		return models.AppropriationLabel(appropriation)
+	}
+	if origin {
+		return "Nao se aplica. " + NoAppropriationsFeedback(true)
+	}
+	return "Nao se aplica. " + NoAppropriationsFeedback(false)
+}
+
+func NewKeyValueLine(key string, value string) fyne.CanvasObject {
+	keyLabel := widget.NewLabel(key + ":")
+	keyLabel.TextStyle = fyne.TextStyle{Bold: true}
+	return container.NewHBox(keyLabel, widget.NewLabel(value))
+}
+
+func BuildStockPresenceFeedback(originFound bool, destinationFound bool) string {
+	switch {
+	case originFound && destinationFound:
+		return "Insumo encontrado na origem e no destino."
+	case !originFound && !destinationFound:
+		return "O insumo informado nao encontrado na obra de origem nem na obra de destino."
+	case !originFound:
+		return "O insumo nao encontrado no estoque da obra de origem. Nao e possivel transferir um item sem saldo de origem."
+	default:
+		return "O insumo foi encontrado na obra de origem, mas nao existe no estoque da obra de destino. Verifique se o Sienge permite transferir este item para o destino ou cadastre o item no estoque de destino."
+	}
+}
+
+func TransferInsumoAddedFeedback(item TransferenciaItemState) string {
+	if strings.TrimSpace(item.StockPresenceFeedback) == "" {
+		return "Insumo adicionado a transferencia."
+	}
+	return "Insumo adicionado a transferencia. " + item.StockPresenceFeedback
 }
 
 func ObraNameByID(obras []models.Obra, id int) string {

@@ -21,28 +21,31 @@ const (
 )
 
 type AppState struct {
-	Config        models.Config
-	Store         ConfigStore
-	Stock         StockService
-	CostCenters   CostCenterService
-	Transfer      TransferService
-	TransferStore TransferStorage
-	HistoryStore  HistoryStorage
-	FileOpener    FileOpener
-	Status        string
-	ActiveTab     string
-	Obras         ObrasTabState
-	Consulta      ConsultaTabState
-	Transferencia TransferenciaTabState
-	Historico     HistoricoTabState
-	Runner        AsyncRunner
-	Window        fyne.Window
-	RefreshUI     func()
+	Config           models.Config
+	Store            ConfigStore
+	Stock            StockService
+	CostCenters      CostCenterService
+	PurchaseRequests PurchaseRequestService
+	Transfer         TransferService
+	TransferStore    TransferStorage
+	HistoryStore     HistoryStorage
+	FileOpener       FileOpener
+	Status           string
+	ActiveTab        string
+	Obras            ObrasTabState
+	Consulta         ConsultaTabState
+	Transferencia    TransferenciaTabState
+	Historico        HistoricoTabState
+	Runner           AsyncRunner
+	Window           fyne.Window
+	RefreshUI        func()
 }
 
 type StockService interface {
 	GetStockItemsByIDs(ctx context.Context, costCenterID int, ids []int) ([]models.Insumo, error)
 	GetBuildingAppropriations(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error)
+	GetStockAppropriationsWithDescriptions(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error)
+	GetStockAppropriationsWithDescriptionsForItem(ctx context.Context, costCenterID int, item models.Insumo) ([]models.Apropriacao, error)
 }
 
 type CostCenterService interface {
@@ -51,6 +54,10 @@ type CostCenterService interface {
 
 type TransferService interface {
 	CreateStockTransfer(ctx context.Context, transfer models.Transferencia) (string, error)
+}
+
+type PurchaseRequestService interface {
+	GetPurchaseRequestItems(ctx context.Context, purchaseRequestID int, buildingID int) ([]models.PurchaseRequestItem, error)
 }
 
 type TransferStorage interface {

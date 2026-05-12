@@ -34,7 +34,7 @@ func TestTransferOriginAndDestinationValidation(t *testing.T) {
 
 func TestAddTransferInsumoAddsSingleItemWithAppropriations(t *testing.T) {
 	stock := &fakeStockService{
-		items: []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC", Quantidade: 150}},
+		items: []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", DetalheID: 10, Marca: "Votorantim", MarcaID: 5, Unidade: "SC", Quantidade: 150}},
 		appropriationsByCostCenter: map[int][]models.Apropriacao{
 			121: {
 				{Codigo: "A001", Descricao: "Fundacao", Quantidade: 40},
@@ -70,6 +70,9 @@ func TestAddTransferInsumoAddsSingleItemWithAppropriations(t *testing.T) {
 	}
 	if item.QuantidadeDisponivel != 40 {
 		t.Fatalf("QuantidadeDisponivel = %v, want origin stock quantity 40", item.QuantidadeDisponivel)
+	}
+	if len(stock.appropriationItems) < 2 || stock.appropriationItems[0].DetalheID != 10 || stock.appropriationItems[0].MarcaID != 5 || stock.appropriationItems[1].DetalheID != 10 || stock.appropriationItems[1].MarcaID != 5 {
+		t.Fatalf("appropriation items = %#v, want full stock identity for origin and destination", stock.appropriationItems)
 	}
 }
 

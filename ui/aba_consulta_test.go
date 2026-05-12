@@ -37,6 +37,21 @@ func TestConsultaTabStateFields(t *testing.T) {
 	}
 }
 
+func TestBuildConsultaViewModel_DefaultsToInsumo(t *testing.T) {
+	state := NewConsultaTabState()
+	viewModel := BuildConsultaViewModel(state)
+	if viewModel.Tipo != models.ConsultaPorInsumo || !viewModel.ShowInsumoInput || viewModel.ShowSolicitacaoInputs || !viewModel.ShowObrasSelector {
+		t.Fatalf("BuildConsultaViewModel(default) = %#v, want only insumo inputs", viewModel)
+	}
+}
+
+func TestBuildConsultaViewModel_ForSolicitacaoCompra(t *testing.T) {
+	viewModel := BuildConsultaViewModel(ConsultaTabState{TipoConsulta: models.ConsultaPorSolicitacaoCompra})
+	if viewModel.Tipo != models.ConsultaPorSolicitacaoCompra || viewModel.ShowInsumoInput || !viewModel.ShowSolicitacaoInputs || !viewModel.ShowObrasSelector {
+		t.Fatalf("BuildConsultaViewModel(solicitacao) = %#v, want only solicitacao inputs", viewModel)
+	}
+}
+
 func TestValidateConsultaInput(t *testing.T) {
 	state := NewAppState(testConfig())
 	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
@@ -122,6 +137,42 @@ func TestLoadConsultaDetalheLoadsAppropriations(t *testing.T) {
 	}
 	if state.Consulta.DetalheAberto == nil || len(state.Consulta.DetalheAberto.Apropriacoes) != 1 {
 		t.Fatalf("DetalheAberto = %#v, want populated details", state.Consulta.DetalheAberto)
+	}
+}
+
+func TestConsultaDetails_RequestsAppropriationsUsingSelectedStockItemIdentity(t *testing.T) {
+	stock := &fakeStockService{appropriations: []models.Apropriacao{{Codigo: "A001", Quantidade: 946}}}
+	state := NewAppState(testConfig())
+	state.Stock = stock
+	state.Consulta.ResultadosNormalizados = []models.ConsultaResultado{{ObraID: 111, ObraNome: "BUILDMATE", InsumoID: 1001, InsumoNome: "Cimento", Detalhe: "CPIII", DetalheID: 123, Marca: "Votoran", MarcaID: 456, Unidade: "kg", Quantidade: 946}}
+
+	if _, err := LoadConsultaDetalhe(context.Background(), state, 0); err != nil {
+		t.Fatalf("LoadConsultaDetalhe() error = %v", err)
+	}
+	if stock.appropriationItem.ID != 1001 || stock.appropriationItem.DetalheID != 123 || stock.appropriationItem.MarcaID != 456 {
+		t.Fatalf("appropriation item = %#v, want full selected stock identity", stock.appropriationItem)
+	}
+}
+
+func TestConsultaDetails_DoesNotReuseAppropriationsBetweenDifferentDetails(t *testing.T) {
+	stock := &fakeStockService{appropriations: []models.Apropriacao{{Codigo: "A001", Quantidade: 1}}}
+	state := NewAppState(testConfig())
+	state.Stock = stock
+	state.Consulta.ResultadosNormalizados = []models.ConsultaResultado{
+		{ObraID: 111, InsumoID: 1001, InsumoNome: "Cimento", Detalhe: "CPIII", DetalheID: 123, Marca: "Votoran", MarcaID: 456},
+		{ObraID: 111, InsumoID: 1001, InsumoNome: "Cimento", Detalhe: "CPIII", DetalheID: 123, MarcaID: 0},
+	}
+
+	if _, err := LoadConsultaDetalhe(context.Background(), state, 0); err != nil {
+		t.Fatalf("LoadConsultaDetalhe(0) error = %v", err)
+	}
+	first := stock.appropriationItem
+	if _, err := LoadConsultaDetalhe(context.Background(), state, 1); err != nil {
+		t.Fatalf("LoadConsultaDetalhe(1) error = %v", err)
+	}
+	second := stock.appropriationItem
+	if first.MarcaID == second.MarcaID {
+		t.Fatalf("appropriation identities should differ: first=%#v second=%#v", first, second)
 	}
 }
 
@@ -224,6 +275,8 @@ type fakeStockService struct {
 	costCenterID               int
 	approprCostCenterIDs       []int
 	resourceID                 int
+	appropriationItem          models.Insumo
+	appropriationItems         []models.Insumo
 	ids                        []int
 }
 
@@ -251,4 +304,14 @@ func (s *fakeStockService) GetBuildingAppropriations(ctx context.Context, costCe
 	}
 
 	return append([]models.Apropriacao(nil), s.appropriations...), nil
+}
+
+func (s *fakeStockService) GetStockAppropriationsWithDescriptions(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error) {
+	return s.GetBuildingAppropriations(ctx, costCenterID, resourceID)
+}
+
+func (s *fakeStockService) GetStockAppropriationsWithDescriptionsForItem(ctx context.Context, costCenterID int, item models.Insumo) ([]models.Apropriacao, error) {
+	s.appropriationItem = item
+	s.appropriationItems = append(s.appropriationItems, item)
+	return s.GetBuildingAppropriations(ctx, costCenterID, item.ID)
 }

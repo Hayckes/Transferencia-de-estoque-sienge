@@ -17,20 +17,43 @@ const (
 
 var ExcelHeaders = []string{
 	"ID Movimento Sienge",
-	"Data e Hora",
+	"Data/Hora",
 	"Usuario",
 	"Cargo",
 	"Solicitante",
 	"Observacao",
-	"Obra Origem",
-	"Obra Destino",
-	"ID Insumo",
-	"Nome Insumo",
+	"Codigo Tipo Documento",
+	"Codigo Tipo Movimento",
+	"Obra Origem ID",
+	"Obra Origem Nome",
+	"Apropriacao Origem Codigo",
+	"Apropriacao Origem Descricao",
+	"Apropriacao Origem BuildingUnitID",
+	"Apropriacao Origem SheetItemID",
+	"Quantidade Origem no Momento da Transferencia",
+	"Quantidade Enviada",
+	"Quantidade Origem Apos Transferencia",
+	"Quantidade Apropriacao Origem no Momento da Transferencia",
+	"Quantidade Apropriacao Origem Apos Transferencia",
+	"Obra Destino ID",
+	"Obra Destino Nome",
+	"Apropriacao Destino Codigo",
+	"Apropriacao Destino Descricao",
+	"Apropriacao Destino BuildingUnitID",
+	"Apropriacao Destino SheetItemID",
+	"Quantidade Destino no Momento da Transferencia",
+	"Quantidade Recebida",
+	"Quantidade Destino Apos Transferencia",
+	"Quantidade Apropriacao Destino no Momento da Transferencia",
+	"Quantidade Apropriacao Destino Apos Transferencia",
+	"Insumo ID",
+	"Nome do Insumo",
 	"Detalhe",
+	"Detalhe ID",
 	"Marca",
-	"Apropriacao Origem",
-	"Apropriacao Destino",
-	"Quantidade",
+	"Marca ID",
+	"Unidade",
+	"Preco Unitario",
 }
 
 func (s Store) EnsureExcelFromHistory() error {
@@ -129,6 +152,36 @@ func writeExcelHeaders(file *excelize.File) error {
 			return err
 		}
 	}
+	lastHeaderCell, err := excelize.CoordinatesToCellName(len(ExcelHeaders), 1)
+	if err != nil {
+		return err
+	}
+	headerStyle, err := file.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Alignment: &excelize.Alignment{
+			Horizontal: "center",
+			Vertical:   "center",
+		},
+		Fill: excelize.Fill{Type: "pattern", Color: []string{"D9EAF7"}, Pattern: 1},
+		Border: []excelize.Border{
+			{Type: "left", Color: "CCCCCC", Style: 1},
+			{Type: "top", Color: "CCCCCC", Style: 1},
+			{Type: "right", Color: "CCCCCC", Style: 1},
+			{Type: "bottom", Color: "CCCCCC", Style: 1},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := file.SetCellStyle(excelSheetName, "A1", lastHeaderCell, headerStyle); err != nil {
+		return err
+	}
+	if err := file.SetPanes(excelSheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"}); err != nil {
+		return err
+	}
+	if err := file.SetColWidth(excelSheetName, "A", "AL", 18); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -141,15 +194,38 @@ func writeExcelRow(file *excelize.File, row int, transfer models.Transferencia, 
 		transfer.Cargo,
 		transfer.Solicitante,
 		transfer.Observacao,
-		models.Obra{ID: transfer.ObraOrigemID, Nome: transfer.ObraOrigemNome}.Label(),
-		models.Obra{ID: transfer.ObraDestinoID, Nome: transfer.ObraDestinoNome}.Label(),
+		transfer.CodigoTipoDocumento,
+		transfer.CodigoTipoMovimento,
+		transfer.ObraOrigemID,
+		transfer.ObraOrigemNome,
+		notApplicableString(item.ApropriacaoOrigemCodigo, item.Apropriacao),
+		notApplicableString(item.ApropriacaoOrigemDescricao, item.ApropriacaoDescricao),
+		notApplicableInt(item.ApropriacaoOrigemBuildingUnitID),
+		notApplicableInt(item.ApropriacaoOrigemSheetItemID),
+		item.QuantidadeEstoqueOrigemAntes,
+		quantityOrFallback(item.QuantidadeEnviada, item.Quantidade),
+		item.QuantidadeEstoqueOrigemDepois,
+		notApplicableFloat(item.QuantidadeApropriacaoOrigemAntes),
+		notApplicableFloat(item.QuantidadeApropriacaoOrigemDepois),
+		transfer.ObraDestinoID,
+		transfer.ObraDestinoNome,
+		notApplicableString(item.ApropriacaoDestinoCodigo, item.ApropriacaoDestino),
+		notApplicableString(item.ApropriacaoDestinoDescricaoSnapshot, item.ApropriacaoDestinoDescricao),
+		notApplicableInt(item.ApropriacaoDestinoBuildingUnitID),
+		notApplicableInt(item.ApropriacaoDestinoSheetItemID),
+		item.QuantidadeEstoqueDestinoAntes,
+		quantityOrFallback(item.QuantidadeRecebida, item.Quantidade),
+		item.QuantidadeEstoqueDestinoDepois,
+		notApplicableFloat(item.QuantidadeApropriacaoDestinoAntes),
+		notApplicableFloat(item.QuantidadeApropriacaoDestinoDepois),
 		item.ID,
 		item.Nome,
 		item.Detalhe,
+		item.DetalheID,
 		item.Marca,
-		item.Apropriacao,
-		item.ApropriacaoDestino,
-		item.Quantidade,
+		item.MarcaID,
+		item.Unidade,
+		item.PrecoUnitario,
 	}
 
 	for index, value := range values {
@@ -163,6 +239,36 @@ func writeExcelRow(file *excelize.File, row int, transfer models.Transferencia, 
 	}
 
 	return nil
+}
+
+func notApplicableString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return "Nao se aplica"
+}
+
+func notApplicableInt(value int) any {
+	if value <= 0 {
+		return "Nao se aplica"
+	}
+	return value
+}
+
+func notApplicableFloat(value *float64) any {
+	if value == nil {
+		return "Nao se aplica"
+	}
+	return *value
+}
+
+func quantityOrFallback(value float64, fallback float64) float64 {
+	if value == 0 {
+		return fallback
+	}
+	return value
 }
 
 func nextExcelRow(file *excelize.File) (int, error) {

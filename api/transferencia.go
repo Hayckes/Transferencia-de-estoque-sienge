@@ -62,16 +62,8 @@ func BuildStockTransferPayload(transfer models.Transferencia) (StockTransferPayl
 
 	items := make([]StockTransferItemPayload, 0, len(transfer.Insumos))
 	for _, item := range transfer.Insumos {
-		sourceAppropriation := StockTransferBuildingAppropriation{
-			BuildingUnitID: item.ApropriacaoOrigemBuildingUnitID,
-			SheetItemID:    item.ApropriacaoOrigemSheetItemID,
-			Percentage:     100,
-		}
-		destinationAppropriation := StockTransferBuildingAppropriation{
-			BuildingUnitID: item.ApropriacaoDestinoBuildingUnitID,
-			SheetItemID:    item.ApropriacaoDestinoSheetItemID,
-			Percentage:     100,
-		}
+		sourceAppropriations := transferPayloadAppropriations(item.ApropriacaoOrigemBuildingUnitID, item.ApropriacaoOrigemSheetItemID)
+		destinationAppropriations := transferPayloadAppropriations(item.ApropriacaoDestinoBuildingUnitID, item.ApropriacaoDestinoSheetItemID)
 		items = append(items, StockTransferItemPayload{
 			Source: StockTransferItemSidePayload{
 				ResourceID:             item.ID,
@@ -79,14 +71,14 @@ func BuildStockTransferPayload(transfer models.Transferencia) (StockTransferPayl
 				TrademarkID:            item.MarcaID,
 				Quantity:               item.Quantidade,
 				UnitOfMeasure:          strings.TrimSpace(item.Unidade),
-				BuildingAppropriations: []StockTransferBuildingAppropriation{sourceAppropriation},
+				BuildingAppropriations: sourceAppropriations,
 			},
 			Destination: StockTransferItemSidePayload{
 				ResourceID:             item.ID,
 				DetailID:               item.DetalheID,
 				TrademarkID:            item.MarcaID,
 				UnitPrice:              item.PrecoUnitario,
-				BuildingAppropriations: []StockTransferBuildingAppropriation{destinationAppropriation},
+				BuildingAppropriations: destinationAppropriations,
 			},
 		})
 	}
@@ -102,6 +94,17 @@ func BuildStockTransferPayload(transfer models.Transferencia) (StockTransferPayl
 		Notes:                   BuildTransferNote(transfer),
 		Items:                   items,
 	}, nil
+}
+
+func transferPayloadAppropriations(buildingUnitID int, sheetItemID int) []StockTransferBuildingAppropriation {
+	if buildingUnitID <= 0 || sheetItemID <= 0 {
+		return nil
+	}
+	return []StockTransferBuildingAppropriation{{
+		BuildingUnitID: buildingUnitID,
+		SheetItemID:    sheetItemID,
+		Percentage:     100,
+	}}
 }
 
 func ValidateTransferencia(transfer models.Transferencia) []string {
@@ -137,16 +140,16 @@ func ValidateTransferencia(transfer models.Transferencia) []string {
 		if item.ID <= 0 {
 			validationErrors = append(validationErrors, prefix+": ID do insumo deve ser numerico positivo")
 		}
-		if strings.TrimSpace(item.Apropriacao) == "" {
+		if item.ApropriacaoOrigemObrigatoria && strings.TrimSpace(item.Apropriacao) == "" {
 			validationErrors = append(validationErrors, prefix+": apropriacao de origem obrigatoria")
 		}
-		if strings.TrimSpace(item.ApropriacaoDestino) == "" {
+		if item.ApropriacaoDestinoObrigatoria && strings.TrimSpace(item.ApropriacaoDestino) == "" {
 			validationErrors = append(validationErrors, prefix+": apropriacao de destino obrigatoria")
 		}
-		if item.ApropriacaoOrigemBuildingUnitID <= 0 || item.ApropriacaoOrigemSheetItemID <= 0 {
+		if item.ApropriacaoOrigemObrigatoria && (item.ApropriacaoOrigemBuildingUnitID <= 0 || item.ApropriacaoOrigemSheetItemID <= 0) {
 			validationErrors = append(validationErrors, prefix+": identificadores da apropriacao de origem obrigatorios")
 		}
-		if item.ApropriacaoDestinoBuildingUnitID <= 0 || item.ApropriacaoDestinoSheetItemID <= 0 {
+		if item.ApropriacaoDestinoObrigatoria && (item.ApropriacaoDestinoBuildingUnitID <= 0 || item.ApropriacaoDestinoSheetItemID <= 0) {
 			validationErrors = append(validationErrors, prefix+": identificadores da apropriacao de destino obrigatorios")
 		}
 		if strings.TrimSpace(item.Unidade) == "" {
