@@ -208,15 +208,23 @@ func TestRunConsultaReturnsServiceErrorWithoutClearingPreviousResults(t *testing
 	}
 }
 
-func TestClearConsultaResetsOnlyConsultaState(t *testing.T) {
+func TestClearConsultaPreservesTypeAndWorksSelection(t *testing.T) {
 	state := NewAppState(testConfig())
+	state.Consulta.TipoConsulta = models.ConsultaPorSolicitacaoCompra
 	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"
+	state.Consulta.ObrasSelecionadas = []models.Obra{state.Config.Obras[0]}
+	state.Consulta.ConsultarTodasObras = false
 	state.Consulta.InsumoIDsInput = "3421"
+	state.Consulta.SolicitacaoCompraID = "99"
+	state.Consulta.SolicitacaoObraID = "121"
 	state.Consulta.Resultados = []models.Insumo{{ID: 3421}}
 
 	ClearConsulta(state)
 
-	if state.Consulta.ObraSelecionada != "" || state.Consulta.InsumoIDsInput != "" || len(state.Consulta.Resultados) != 0 {
+	if state.Consulta.TipoConsulta != models.ConsultaPorSolicitacaoCompra || state.Consulta.ObraSelecionada != "121 - Residencial Novo Horizonte" || len(state.Consulta.ObrasSelecionadas) != 1 {
+		t.Fatalf("Consulta type/work selection was not preserved: %#v", state.Consulta)
+	}
+	if state.Consulta.InsumoIDsInput != "" || state.Consulta.SolicitacaoCompraID != "" || state.Consulta.SolicitacaoObraID != "" || len(state.Consulta.Resultados) != 0 {
 		t.Fatalf("Consulta was not cleared: %#v", state.Consulta)
 	}
 	if state.Consulta.DetalheAberto != nil {

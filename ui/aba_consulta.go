@@ -25,6 +25,7 @@ type ConsultaTabState struct {
 	ResultadosNormalizados []models.ConsultaResultado
 	DetalheAberto          *models.Insumo
 	SolicitacaoItensCount  int
+	FeedbackMessage        string
 }
 
 type ConsultaViewModel struct {
@@ -55,7 +56,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 	solicitacaoEntry.SetText(state.Consulta.SolicitacaoCompraID)
 	solicitacaoEntry.OnChanged = func(value string) { state.Consulta.SolicitacaoCompraID = value }
 	solicitacaoObraEntry := widget.NewEntry()
-	solicitacaoObraEntry.SetPlaceHolder("ID da obra da solicitacao")
+	solicitacaoObraEntry.SetPlaceHolder("ID da obra/centro de custo")
 	solicitacaoObraEntry.SetText(state.Consulta.SolicitacaoObraID)
 	solicitacaoObraEntry.OnChanged = func(value string) { state.Consulta.SolicitacaoObraID = value }
 
@@ -95,9 +96,13 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 	}
 	worksSelector := container.NewVBox(workChecks...)
 
-	status := NewStatusView(state.Window, "")
+	status := NewStatusView(state.Window, state.Consulta.FeedbackMessage)
 	consultar := widget.NewButton("Consultar", func() {
-		status.SetText(StatusLoading)
+		if err := ValidateConsultaForm(state.Consulta); err != nil {
+			setConsultaStatus(state, status, err.Error())
+			return
+		}
+		setConsultaStatus(state, status, StatusLoading)
 		state.Runner.Run(func() error {
 			return RunConsulta(context.Background(), state)
 		}, func(err error) {
@@ -105,10 +110,10 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
 					return
 				}
-				status.SetText(consultaErrorFeedback(state, err))
+				setConsultaStatus(state, status, consultaErrorFeedback(state, err))
 				return
 			}
-			status.SetText(consultaSuccessFeedback(state))
+			setConsultaStatus(state, status, consultaSuccessFeedback(state))
 			state.RefreshTab(TabConsulta)
 		})
 	})
@@ -116,10 +121,10 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 	selectedResultIndex := -1
 	detailsButton := widget.NewButton("Detalhes do item selecionado", func() {
 		if selectedResultIndex < 0 {
-			status.SetText("Selecione um item na tabela.")
+			setConsultaStatus(state, status, "Selecione um item na tabela.")
 			return
 		}
-		status.SetText(StatusLoading)
+		setConsultaStatus(state, status, StatusLoading)
 		state.Runner.Run(func() error {
 			_, err := LoadConsultaDetalhe(context.Background(), state, selectedResultIndex)
 			return err
@@ -128,12 +133,12 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
 					return
 				}
-				status.SetText(err.Error())
+				setConsultaStatus(state, status, err.Error())
 				return
 			}
 			if state.Consulta.DetalheAberto != nil {
 				ShowInsumoDetailsModal(state.Window, *state.Consulta.DetalheAberto)
-				status.SetText("Detalhes carregados.")
+				setConsultaStatus(state, status, "Detalhes carregados.")
 			}
 		})
 	})
@@ -150,7 +155,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		idsEntry.SetText("")
 		solicitacaoEntry.SetText("")
 		solicitacaoObraEntry.SetText("")
-		status.SetText("Consulta limpa.")
+		setConsultaStatus(state, status, "Consulta limpa.")
 		state.RefreshTab(TabConsulta)
 	})
 
@@ -168,6 +173,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		state.Consulta.TipoConsulta = consultaTipoFromLabel(value)
 		ClearConsultaResults(state)
 		applyConsultaViewModel(BuildConsultaViewModel(state.Consulta), insumoSection, solicitacaoSection)
+		setConsultaStatus(state, status, "Tipo de consulta alterado. Clique em Consultar para atualizar os resultados.")
 		selectedResultIndex = -1
 		detailsButton.Disable()
 		resultTableRows = nil
@@ -176,12 +182,12 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 	worksScroll := container.NewVScroll(worksSelector)
 	worksScroll.SetMinSize(fyne.NewSize(0, 130))
 	topContent := container.NewPadded(container.NewVBox(
-		widget.NewLabel("Consulta de estoque"),
+		widget.NewLabel("Consultar estoque"),
 		responsiveRow(expandingInput(tipoSelect), consultar, limpar),
-		widget.NewLabel("Obras onde buscar estoque"),
-		worksScroll,
 		insumoSection,
 		solicitacaoSection,
+		widget.NewLabel("Obras onde buscar estoque"),
+		worksScroll,
 		status.Object(),
 	))
 
@@ -205,6 +211,9 @@ func ValidateConsultaInput(state *AppState) (int, []int, error) {
 func RunConsulta(ctx context.Context, state *AppState) error {
 	if state.Stock == nil {
 		return errors.New("servico de estoque nao configurado")
+	}
+	if err := ValidateConsultaForm(state.Consulta); err != nil {
+		return err
 	}
 	if effectiveConsultaTipo(state.Consulta.TipoConsulta) == models.ConsultaPorSolicitacaoCompra {
 		return RunConsultaPorSolicitacao(ctx, state)
@@ -372,7 +381,25 @@ func LoadConsultaDetalhe(ctx context.Context, state *AppState, resultIndex int) 
 }
 
 func ClearConsulta(state *AppState) {
+	tipo := state.Consulta.TipoConsulta
+	obraSelecionada := state.Consulta.ObraSelecionada
+	obrasSelecionadas := append([]models.Obra(nil), state.Consulta.ObrasSelecionadas...)
+	consultarTodasObras := state.Consulta.ConsultarTodasObras
 	state.Consulta = NewConsultaTabState()
+	state.Consulta.TipoConsulta = effectiveConsultaTipo(tipo)
+	state.Consulta.ObraSelecionada = obraSelecionada
+	state.Consulta.ObrasSelecionadas = obrasSelecionadas
+	state.Consulta.ConsultarTodasObras = consultarTodasObras
+}
+
+func setConsultaStatus(state *AppState, status *StatusView, message string) {
+	if state != nil {
+		state.Consulta.FeedbackMessage = message
+		state.Status = message
+	}
+	if status != nil {
+		status.SetText(message)
+	}
 }
 
 func ClearConsultaResults(state *AppState) {

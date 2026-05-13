@@ -245,6 +245,117 @@ func TestCreateStockTransferReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestCreateStockTransferDryRunDoesNotPost(t *testing.T) {
+	t.Setenv(TransferDryRunEnv, "true")
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("CreateStockTransfer() error = nil, want dry-run block")
+	}
+	if calls != 0 {
+		t.Fatalf("calls = %d, want no POST in dry-run", calls)
+	}
+}
+
+func TestCreateStockTransferDoesNotRetryOnHTML(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<html>blocked</html>"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("CreateStockTransfer() error = nil, want HTML error")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want one POST without retry", calls)
+	}
+}
+
+func TestCreateStockTransferDoesNotRetryOnServerError(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"erro":"falha"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("CreateStockTransfer() error = nil, want server error")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want one POST without retry", calls)
+	}
+}
+
+func TestCircuitBreakerBlocksAfterHTMLResponse(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>blocked</html>"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("first CreateStockTransfer() error = nil, want HTML error")
+	}
+	_, err = client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("second CreateStockTransfer() error = nil, want circuit breaker error")
+	}
+	var breakerErr *CircuitBreakerBlockedError
+	if !errors.As(err, &breakerErr) {
+		t.Fatalf("second error type = %T, want *CircuitBreakerBlockedError", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want second POST blocked before network", calls)
+	}
+}
+
+func TestCircuitBreakerBlocksAfterRedirect(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/sienge/internal-api/v1/auth/sso/callback", http.StatusFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("first CreateStockTransfer() error = nil, want redirect error")
+	}
+	_, err = client.CreateStockTransfer(context.Background(), validTransferencia())
+	if err == nil {
+		t.Fatal("second CreateStockTransfer() error = nil, want circuit breaker error")
+	}
+	var breakerErr *CircuitBreakerBlockedError
+	if !errors.As(err, &breakerErr) {
+		t.Fatalf("second error type = %T, want *CircuitBreakerBlockedError", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want redirect not followed and second POST blocked", calls)
+	}
+}
+
 func TestExtractMovementIDChecksBodyBeforeLocation(t *testing.T) {
 	resp := &http.Response{Header: http.Header{"Location": []string{"https://example.com/stock-movements/transfer/7842"}}}
 	movementID := ExtractMovementID(resp, []byte(`{"documentNumber":"DOC-1"}`))

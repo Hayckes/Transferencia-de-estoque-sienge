@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 )
 
 const stockTransfersEndpoint = "/stock-movements/transfer"
+
+const TransferDryRunEnv = "TRANSFER_DRY_RUN"
 
 type TransferValidationError struct {
 	Errors []string
@@ -171,20 +174,25 @@ func ValidateTransferencia(transfer models.Transferencia) []string {
 
 func BuildTransferNote(transfer models.Transferencia) string {
 	parts := []string{
-		fmt.Sprintf("Transferencia realizada por %s (%s).", strings.TrimSpace(transfer.Usuario), strings.TrimSpace(transfer.Cargo)),
-		fmt.Sprintf("Solicitante: %s.", strings.TrimSpace(transfer.Solicitante)),
-		fmt.Sprintf("Data/hora: %s.", transfer.DataHora.Format("02/01/2006 15:04:05")),
-		fmt.Sprintf("Origem: %d - %s.", transfer.ObraOrigemID, strings.TrimSpace(transfer.ObraOrigemNome)),
-		fmt.Sprintf("Destino: %d - %s.", transfer.ObraDestinoID, strings.TrimSpace(transfer.ObraDestinoNome)),
+		"=====================================================\n",
+		"TRANSFERENCIA DE ESTOQUE VIA API\n",
+		"=====================================================\n",
+		fmt.Sprintf("Transferencia realizada por %s (%s)\n", strings.TrimSpace(transfer.Usuario), strings.TrimSpace(transfer.Cargo)),
+		fmt.Sprintf("Solicitante: %s\n", strings.TrimSpace(transfer.Solicitante)),
+		fmt.Sprintf("Data/hora: %s\n", transfer.DataHora.Format("02/01/2006 15:04:05")),
+		"=====================================================\n",
+		fmt.Sprintf("Origem: %d - %s\n", transfer.ObraOrigemID, strings.TrimSpace(transfer.ObraOrigemNome)),
+		fmt.Sprintf("Destino: %d - %s\n", transfer.ObraDestinoID, strings.TrimSpace(transfer.ObraDestinoNome)),
+		"=====================================================",
 	}
 	if observation := strings.TrimSpace(transfer.Observacao); observation != "" {
-		parts = append(parts, fmt.Sprintf("Observacao: %s.", observation))
+		parts = append(parts, fmt.Sprintf("Observacao: %s\n", observation))
 	}
 
 	itemParts := make([]string, 0, len(transfer.Insumos))
 	for _, item := range transfer.Insumos {
 		itemParts = append(itemParts, fmt.Sprintf(
-			"%d - %s %s - %s | apropriacao origem %s | apropriacao destino %s | quantidade %s",
+			"%d - %s %s - %s\n Apropriacao origem %s\n  Apropriacao destino %s\n Transferida quantidade %s\n",
 			item.ID,
 			strings.TrimSpace(item.Nome),
 			strings.TrimSpace(item.Detalhe),
@@ -213,6 +221,17 @@ func (c *Client) CreateStockTransfer(ctx context.Context, transfer models.Transf
 	if err != nil {
 		return "", err
 	}
+	if TransferDryRunEnabled() {
+		return "", errors.New("Envio de transferencia temporariamente bloqueado por seguranca. TRANSFER_DRY_RUN=true; nenhum POST foi enviado ao Sienge.")
+	}
+	if err := stockTransferCircuitBreaker.Check(c.baseURL); err != nil {
+		return "", err
+	}
+	release, err := stockTransferPostGate.Begin(c.baseURL)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -221,10 +240,52 @@ func (c *Client) CreateStockTransfer(ctx context.Context, transfer models.Transf
 
 	resp, err := c.doResponse(ctx, http.MethodPost, stockTransfersEndpoint, body)
 	if err != nil {
+		if shouldBlockTransferAfterError(err) {
+			stockTransferCircuitBreaker.Block(c.baseURL, circuitBreakerReason(err), "")
+		}
 		return "", err
 	}
 
 	return ExtractMovementID(&http.Response{Header: resp.Header}, resp.Body), nil
+}
+
+func TransferDryRunEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(TransferDryRunEnv)))
+	return value == "1" || value == "true" || value == "sim" || value == "yes"
+}
+
+func shouldBlockTransferAfterError(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.Kind == APIErrorKindHTML || apiErr.Kind == APIErrorKindRedirect || apiErr.Kind == APIErrorKindTimeout {
+		return true
+	}
+	switch apiErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+func circuitBreakerReason(err error) string {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Kind {
+		case APIErrorKindHTML:
+			return "resposta HTML inesperada do Sienge"
+		case APIErrorKindRedirect:
+			return "redirecionamento inesperado do Sienge"
+		case APIErrorKindTimeout:
+			return "timeout ao comunicar com o Sienge"
+		}
+		if apiErr.StatusCode > 0 {
+			return fmt.Sprintf("HTTP %d retornado pelo Sienge", apiErr.StatusCode)
+		}
+	}
+	return "resposta anormal do Sienge"
 }
 
 func ExtractMovementID(resp *http.Response, body []byte) string {

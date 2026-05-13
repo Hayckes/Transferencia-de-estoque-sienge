@@ -1,38 +1,42 @@
 package ui
 
-import (
-	"testing"
-
-	"sienge-transfer/models"
-)
+import "testing"
 
 func TestToggleSelectAllWorks_ChecksAllWorks(t *testing.T) {
-	works := []models.Obra{{ID: 1}, {ID: 2}}
-	state := ToggleSelectAllWorks(works, true)
-	if !state.ConsultarTodasObras || len(state.ObrasSelecionadas) != 2 {
-		t.Fatalf("state = %#v, want all selected", state)
+	obras := testConfig().Obras
+	selection := ToggleSelectAllWorks(obras, true)
+
+	if !selection.ConsultarTodasObras || len(selection.ObrasSelecionadas) != len(obras) {
+		t.Fatalf("selection = %#v, want all works selected", selection)
 	}
 }
 
 func TestToggleSelectAllWorks_UnchecksAllWorks(t *testing.T) {
-	state := ToggleSelectAllWorks([]models.Obra{{ID: 1}}, false)
-	if state.ConsultarTodasObras || len(state.ObrasSelecionadas) != 0 {
-		t.Fatalf("state = %#v, want none selected", state)
+	obras := testConfig().Obras
+	selection := ToggleSelectAllWorks(obras, false)
+
+	if selection.ConsultarTodasObras || len(selection.ObrasSelecionadas) != 0 {
+		t.Fatalf("selection = %#v, want all works cleared", selection)
 	}
 }
 
 func TestToggleSingleWork_UnchecksSelectAllWhenOneWorkIsUnchecked(t *testing.T) {
-	works := []models.Obra{{ID: 1}, {ID: 2}}
-	state := ToggleSingleWork(works, ConsultaSelectionState{ObrasSelecionadas: works, ConsultarTodasObras: true}, works[0], false)
-	if state.ConsultarTodasObras || len(state.ObrasSelecionadas) != 1 {
-		t.Fatalf("state = %#v, want select all unchecked", state)
+	obras := testConfig().Obras
+	selection := ToggleSingleWork(obras, ToggleSelectAllWorks(obras, true), obras[0], false)
+
+	if selection.ConsultarTodasObras || len(selection.ObrasSelecionadas) != len(obras)-1 {
+		t.Fatalf("selection = %#v, want select all unchecked and one work removed", selection)
 	}
 }
 
 func TestToggleSingleWork_ChecksSelectAllWhenAllWorksAreSelectedManually(t *testing.T) {
-	works := []models.Obra{{ID: 1}, {ID: 2}}
-	state := ToggleSingleWork(works, ConsultaSelectionState{ObrasSelecionadas: []models.Obra{works[0]}}, works[1], true)
-	if !state.ConsultarTodasObras || len(state.ObrasSelecionadas) != 2 {
-		t.Fatalf("state = %#v, want select all checked", state)
+	obras := testConfig().Obras
+	selection := ConsultaSelectionState{}
+	for _, obra := range obras {
+		selection = ToggleSingleWork(obras, selection, obra, true)
+	}
+
+	if !selection.ConsultarTodasObras || len(selection.ObrasSelecionadas) != len(obras) {
+		t.Fatalf("selection = %#v, want select all checked after all manual selections", selection)
 	}
 }

@@ -27,6 +27,29 @@ func TestNewClientBuildsBaseURLAndTimeout(t *testing.T) {
 	}
 }
 
+func TestNewSiengeAPIBaseURLAcceptsOnlySafeSubdomain(t *testing.T) {
+	apiURL, err := NewSiengeAPIBaseURL("produtoeinovacao")
+	if err != nil {
+		t.Fatalf("NewSiengeAPIBaseURL() error = %v", err)
+	}
+	if apiURL.String() != "https://api.sienge.com.br/produtoeinovacao/public/api/v1" {
+		t.Fatalf("url = %q, want public API URL", apiURL.String())
+	}
+
+	for _, subdomain := range []string{
+		"https://produtoeinovacao.sienge.com.br/sienge/",
+		"produtoeinovacao/sienge/api/public/v1",
+		"produtoeinovacao/internal-api",
+		"produtoeinovacao?x=1",
+	} {
+		t.Run(subdomain, func(t *testing.T) {
+			if _, err := NewSiengeAPIBaseURL(subdomain); err == nil {
+				t.Fatal("NewSiengeAPIBaseURL() error = nil, want rejection")
+			}
+		})
+	}
+}
+
 func TestNewClientWithBaseURLValidatesRequiredFields(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -259,8 +282,54 @@ func TestDoResponseRejectsHTMLSuccessResponse(t *testing.T) {
 	}
 }
 
+func TestDoResponseRejectsHTMLByBodyPrefix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("   <!DOCTYPE html><html>login</html>"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	err := client.ValidateCredentials(context.Background())
+	if err == nil {
+		t.Fatal("ValidateCredentials() error = nil, want HTML response error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ValidateCredentials() error type = %T, want *APIError", err)
+	}
+	if apiErr.Kind != APIErrorKindHTML || apiErr.Body != "" {
+		t.Fatalf("APIError = %#v, want HTML kind without raw body", apiErr)
+	}
+}
+
+func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/sienge/internal-api/v1/auth/sso/callback?token=secret", http.StatusFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	err := client.ValidateCredentials(context.Background())
+	if err == nil {
+		t.Fatal("ValidateCredentials() error = nil, want redirect error")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 redirect response without follow-up", calls)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ValidateCredentials() error type = %T, want *APIError", err)
+	}
+	if apiErr.Kind != APIErrorKindRedirect || strings.Contains(apiErr.Body, "secret") {
+		t.Fatalf("APIError = %#v, want sanitized redirect error", apiErr)
+	}
+}
+
 func newTestClient(t *testing.T, baseURL string, httpClient *http.Client) *Client {
 	t.Helper()
+	resetTransferSafetyStateForTests()
 
 	client, err := NewClientWithBaseURL(baseURL, "usuario", "senha", httpClient)
 	if err != nil {

@@ -347,6 +347,43 @@ func TestSendTransferenciaDoesNotSaveWhenAPIFails(t *testing.T) {
 	}
 }
 
+func TestTransferSubmitGuardBlocksSecondSubmissionWhileSubmitting(t *testing.T) {
+	state := validTransferStateWithItem()
+	release, err := BeginTransferSubmission(state)
+	if err != nil {
+		t.Fatalf("BeginTransferSubmission() error = %v", err)
+	}
+	if !state.Transferencia.IsSubmitting {
+		t.Fatal("IsSubmitting = false, want true")
+	}
+	if _, err := BeginTransferSubmission(state); err == nil {
+		t.Fatal("second BeginTransferSubmission() error = nil, want block")
+	}
+	release()
+	if state.Transferencia.IsSubmitting {
+		t.Fatal("IsSubmitting = true after release, want false")
+	}
+	secondRelease, err := BeginTransferSubmission(state)
+	if err != nil {
+		t.Fatalf("BeginTransferSubmission() after release error = %v", err)
+	}
+	secondRelease()
+}
+
+func TestSendTransferenciaReleasesSubmitGuardAfterAPIFailure(t *testing.T) {
+	state := validTransferStateWithItem()
+	state.Transfer = &fakeTransferService{err: errors.New("api falhou")}
+	state.TransferStore = &fakeTransferStorage{}
+
+	_, err := SendTransferencia(context.Background(), state)
+	if err == nil {
+		t.Fatal("SendTransferencia() error = nil, want API error")
+	}
+	if state.Transferencia.IsSubmitting {
+		t.Fatal("IsSubmitting = true after failure, want false")
+	}
+}
+
 func TestParseQuantidadeTransferirAcceptsCommaAndDot(t *testing.T) {
 	tests := map[string]float64{"10,5": 10.5, "10.5": 10.5, "3": 3}
 	for input, want := range tests {
@@ -401,6 +438,18 @@ func TestClearTransferenciaResetsDefaults(t *testing.T) {
 	ClearTransferencia(state)
 	if state.Transferencia.CodigoDocumento != "TR" || state.Transferencia.CodigoMovimento != "3" || len(state.Transferencia.Itens) != 0 {
 		t.Fatalf("Transferencia after clear = %#v, want defaults", state.Transferencia)
+	}
+}
+
+func TestSetTransferStatusPersistsSuccessFeedback(t *testing.T) {
+	state := validTransferStateWithItem()
+	status := NewStatusView(nil, "")
+	message := TransferSuccessFeedback("MOV-1")
+
+	setTransferStatus(state, status, message)
+
+	if state.Transferencia.FeedbackMessage != message || state.Status != message || status.Text() != message {
+		t.Fatalf("feedback not persisted: state=%q global=%q view=%q", state.Transferencia.FeedbackMessage, state.Status, status.Text())
 	}
 }
 

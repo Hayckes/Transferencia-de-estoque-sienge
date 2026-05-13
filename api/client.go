@@ -9,15 +9,27 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	BasePath       = "/public/api/v1"
-	DefaultTimeout = 30 * time.Second
-	maxErrorBody   = 4096
+	BasePath              = "/public/api/v1"
+	DefaultTimeout        = 30 * time.Second
+	maxErrorBody          = 4096
+	transferBlockDuration = 10 * time.Minute
+	transferPostInterval  = 30 * time.Second
 )
+
+const (
+	APIErrorKindHTML     = "html"
+	APIErrorKindRedirect = "redirect"
+	APIErrorKindTimeout  = "timeout"
+)
+
+var validSubdomainPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 
 type Client struct {
 	baseURL    string
@@ -30,7 +42,40 @@ type APIError struct {
 	StatusCode int
 	Message    string
 	Body       string
+	Kind       string
 }
+
+type CircuitBreakerState struct {
+	Tenant        string
+	BlockedUntil  time.Time
+	Reason        string
+	LastRequestID string
+}
+
+type CircuitBreaker struct {
+	mu       sync.Mutex
+	duration time.Duration
+	now      func() time.Time
+	states   map[string]CircuitBreakerState
+}
+
+type CircuitBreakerBlockedError struct {
+	State CircuitBreakerState
+}
+
+func (e *CircuitBreakerBlockedError) Error() string {
+	return fmt.Sprintf("Envio de transferencias bloqueado temporariamente por seguranca. Motivo: %s. Aguarde ate %s ou revise a configuracao da API antes de tentar novamente.", e.State.Reason, e.State.BlockedUntil.Format("15:04:05"))
+}
+
+type transferPostGate struct {
+	mu          sync.Mutex
+	inFlight    map[string]bool
+	lastStarted map[string]time.Time
+	now         func() time.Time
+}
+
+var stockTransferCircuitBreaker = NewCircuitBreaker(transferBlockDuration)
+var stockTransferPostGate = newTransferPostGate()
 
 type apiResponse struct {
 	StatusCode int
@@ -47,13 +92,33 @@ func (e *APIError) Error() string {
 }
 
 func NewClient(subdomain, username, password string) (*Client, error) {
+	apiURL, err := NewSiengeAPIBaseURL(subdomain)
+	if err != nil {
+		return nil, err
+	}
+	baseURL := strings.TrimRight(apiURL.String(), "/")
+	return NewClientWithBaseURL(baseURL, username, password, nil)
+}
+
+func NewSiengeAPIBaseURL(subdomain string) (*url.URL, error) {
 	subdomain = strings.TrimSpace(subdomain)
 	if subdomain == "" {
 		return nil, errors.New("subdominio da empresa obrigatorio")
 	}
+	lower := strings.ToLower(subdomain)
+	if strings.Contains(lower, "://") || strings.ContainsAny(subdomain, "/?#") {
+		return nil, errors.New("subdominio deve conter apenas o identificador da empresa, sem URL ou caminho")
+	}
+	for _, forbidden := range []string{"internal-api", "callback", "sienge/api"} {
+		if strings.Contains(lower, forbidden) {
+			return nil, errors.New("subdominio contem caminho de API/web nao permitido")
+		}
+	}
+	if !validSubdomainPattern.MatchString(subdomain) {
+		return nil, errors.New("subdominio contem caracteres invalidos")
+	}
 
-	baseURL := fmt.Sprintf("https://api.sienge.com.br/%s%s", url.PathEscape(strings.Trim(subdomain, "/")), BasePath)
-	return NewClientWithBaseURL(baseURL, username, password, nil)
+	return url.Parse(fmt.Sprintf("https://api.sienge.com.br/%s%s", url.PathEscape(subdomain), BasePath))
 }
 
 func NewClientWithBaseURL(baseURL, username, password string, httpClient *http.Client) (*Client, error) {
@@ -71,7 +136,13 @@ func NewClientWithBaseURL(baseURL, username, password string, httpClient *http.C
 		return nil, errors.New("senha da API obrigatoria")
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: DefaultTimeout}
+		httpClient = defaultHTTPClient()
+	} else {
+		copyClient := *httpClient
+		if copyClient.CheckRedirect == nil {
+			copyClient.CheckRedirect = dontFollowRedirects
+		}
+		httpClient = &copyClient
 	}
 
 	return &Client{
@@ -80,6 +151,22 @@ func NewClientWithBaseURL(baseURL, username, password string, httpClient *http.C
 		password:   password,
 		httpClient: httpClient,
 	}, nil
+}
+
+func defaultHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       DefaultTimeout,
+		CheckRedirect: dontFollowRedirects,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 2,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
+}
+
+func dontFollowRedirects(req *http.Request, via []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func (c *Client) BaseURL() string {
@@ -140,7 +227,7 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body []byt
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, &APIError{Message: "Tempo limite excedido ao comunicar com o Sienge. Tente novamente."}
+			return nil, &APIError{Message: "Tempo limite excedido ao comunicar com o Sienge. Nao reenvie a transferencia sem consultar o Sienge antes.", Kind: APIErrorKindTimeout}
 		}
 		return nil, fmt.Errorf("falha de comunicacao com o Sienge: %w", err)
 	}
@@ -150,10 +237,19 @@ func (c *Client) doResponse(ctx context.Context, method, path string, body []byt
 	if err != nil {
 		return nil, err
 	}
+	if isRedirectStatus(resp.StatusCode) {
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    "O Sienge redirecionou a chamada da API para outro endereco. Isso indica URL base incorreta, credencial invalida ou endpoint indisponivel para esta empresa.",
+			Body:       sanitizeRedirectLocation(resp.Header.Get("Location")),
+			Kind:       APIErrorKindRedirect,
+		}
+	}
 	if isHTMLResponse(resp.Header, respBody) {
 		return nil, &APIError{
 			StatusCode: resp.StatusCode,
-			Message:    "Resposta inesperada do Sienge em formato HTML. Verifique a URL base da API, as credenciais e se este endpoint esta disponivel para a empresa.",
+			Message:    "O Sienge retornou resposta em formato HTML em uma chamada de API. Isso normalmente indica redirecionamento, bloqueio temporario, URL incorreta ou endpoint indisponivel.",
+			Kind:       APIErrorKindHTML,
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -176,8 +272,31 @@ func isHTMLResponse(header http.Header, body []byte) bool {
 		return true
 	}
 
-	trimmed := bytes.TrimSpace(body)
-	return len(trimmed) > 0 && trimmed[0] == '<'
+	trimmed := strings.ToLower(string(bytes.TrimSpace(body)))
+	return strings.HasPrefix(trimmed, "<html") || strings.HasPrefix(trimmed, "<!doctype html")
+}
+
+func isRedirectStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeRedirectLocation(location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return ""
+	}
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return redactSensitiveWords(location)
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return redactSensitiveWords(parsed.String())
 }
 
 func (c *Client) endpoint(path string) (string, error) {
@@ -215,8 +334,12 @@ func newAPIError(statusCode int, body []byte) *APIError {
 
 func messageForStatus(statusCode int) string {
 	switch {
+	case isRedirectStatus(statusCode):
+		return "O Sienge redirecionou a chamada da API para outro endereco. Verifique a URL base e as credenciais."
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
 		return "Credenciais invalidas ou sem permissao. Refaca o onboarding das credenciais da API."
+	case statusCode == http.StatusTooManyRequests:
+		return "Limite de chamadas do Sienge atingido. Aguarde antes de tentar novamente."
 	case statusCode == http.StatusNotFound:
 		return "Recurso nao encontrado no Sienge. Verifique se a obra, insumo ou endpoint esta correto."
 	case statusCode == http.StatusUnprocessableEntity:
@@ -226,6 +349,80 @@ func messageForStatus(statusCode int) string {
 	default:
 		return fmt.Sprintf("Erro ao comunicar com o Sienge. Codigo HTTP: %d", statusCode)
 	}
+}
+
+func NewCircuitBreaker(duration time.Duration) *CircuitBreaker {
+	return &CircuitBreaker{duration: duration, now: time.Now, states: make(map[string]CircuitBreakerState)}
+}
+
+func (b *CircuitBreaker) Check(tenant string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	state, ok := b.states[tenant]
+	if !ok {
+		return nil
+	}
+	if !b.now().Before(state.BlockedUntil) {
+		delete(b.states, tenant)
+		return nil
+	}
+	return &CircuitBreakerBlockedError{State: state}
+}
+
+func (b *CircuitBreaker) Block(tenant, reason, requestID string) CircuitBreakerState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	state := CircuitBreakerState{Tenant: tenant, BlockedUntil: b.now().Add(b.duration), Reason: strings.TrimSpace(reason), LastRequestID: requestID}
+	if state.Reason == "" {
+		state.Reason = "resposta anormal do Sienge"
+	}
+	b.states[tenant] = state
+	return state
+}
+
+func (b *CircuitBreaker) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.states = make(map[string]CircuitBreakerState)
+}
+
+func newTransferPostGate() *transferPostGate {
+	return &transferPostGate{inFlight: make(map[string]bool), lastStarted: make(map[string]time.Time), now: time.Now}
+}
+
+func (g *transferPostGate) Begin(tenant string) (func(), error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.inFlight[tenant] {
+		return nil, errors.New("Transferencia ja esta em envio para esta empresa. Aguarde a conclusao.")
+	}
+	now := g.now()
+	if last, ok := g.lastStarted[tenant]; ok && now.Sub(last) < transferPostInterval {
+		return nil, fmt.Errorf("Aguarde %s antes de enviar outra transferencia para esta empresa.", (transferPostInterval - now.Sub(last)).Round(time.Second))
+	}
+	g.inFlight[tenant] = true
+	g.lastStarted[tenant] = now
+
+	return func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		delete(g.inFlight, tenant)
+	}, nil
+}
+
+func (g *transferPostGate) Reset() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.inFlight = make(map[string]bool)
+	g.lastStarted = make(map[string]time.Time)
+}
+
+func resetTransferSafetyStateForTests() {
+	stockTransferCircuitBreaker.Reset()
+	stockTransferPostGate.Reset()
 }
 
 func sanitizeBody(body string) string {

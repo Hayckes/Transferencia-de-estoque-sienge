@@ -14,6 +14,28 @@ func TestCalculateTransferBalances_UsesAppropriationStockWhenSelected(t *testing
 	}
 }
 
+func TestCalculateTransferBalances_UsesOriginAppropriationWhenSelected(t *testing.T) {
+	origin := 20.0
+	balances, err := CalculateTransferBalances(TransferBalanceInput{OriginTotalStock: 50, DestinationTotalStock: 12, OriginAppropriationStock: &origin, QuantityToTransfer: 5})
+	if err != nil {
+		t.Fatalf("CalculateTransferBalances() error = %v", err)
+	}
+	if !balances.UsesOriginAppropriation || balances.OriginCurrentStock != 20 || balances.OriginAfterTransfer != 15 {
+		t.Fatalf("balances = %#v, want origin appropriation stock", balances)
+	}
+}
+
+func TestCalculateTransferBalances_UsesDestinationAppropriationWhenSelected(t *testing.T) {
+	destination := 7.0
+	balances, err := CalculateTransferBalances(TransferBalanceInput{OriginTotalStock: 50, DestinationTotalStock: 12, DestinationAppropriationStock: &destination, QuantityToTransfer: 5})
+	if err != nil {
+		t.Fatalf("CalculateTransferBalances() error = %v", err)
+	}
+	if !balances.UsesDestinationAppropriation || balances.DestinationCurrentStock != 7 || balances.DestinationAfterTransfer != 12 {
+		t.Fatalf("balances = %#v, want destination appropriation stock", balances)
+	}
+}
+
 func TestCalculateTransferBalances_UsesTotalStockWhenNoAppropriation(t *testing.T) {
 	balances, err := CalculateTransferBalances(TransferBalanceInput{OriginTotalStock: 50, DestinationTotalStock: 12, QuantityToTransfer: 5})
 	if err != nil {

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -39,6 +40,7 @@ type AppState struct {
 	Runner           AsyncRunner
 	Window           fyne.Window
 	RefreshUI        func()
+	transferSubmitMu sync.Mutex
 }
 
 type StockService interface {

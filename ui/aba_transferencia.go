@@ -12,14 +12,23 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
+	"sienge-transfer/api"
 	"sienge-transfer/models"
 )
 
 var (
-	ErrObraOrigemObrigatoria       = errors.New("selecione a obra de origem")
-	ErrObraDestinoObrigatoria      = errors.New("selecione a obra de destino")
-	ErrObrasTransferenciaIguais    = errors.New("obra de origem deve ser diferente da obra de destino")
-	ErrMultiplosInsumosEncontrados = errors.New("foram encontrados multiplos insumos com este ID; selecione detalhe e marca")
+	ErrObraOrigemObrigatoria                = errors.New("selecione a obra de origem")
+	ErrObraDestinoObrigatoria               = errors.New("selecione a obra de destino")
+	ErrObrasTransferenciaIguais             = errors.New("obra de origem deve ser diferente da obra de destino")
+	ErrMultiplosInsumosEncontrados          = errors.New("foram encontrados multiplos insumos com este ID; selecione detalhe e marca")
+	ErrTransferQuantityGreaterThanAvailable = errors.New("A quantidade informada e maior que o saldo disponivel na origem.")
+)
+
+type RecalculateTrigger string
+
+const (
+	RecalculateByButton            RecalculateTrigger = "button"
+	RecalculateByQuantityFocusLost RecalculateTrigger = "quantity_focus_lost"
 )
 
 type MultipleInsumosError struct {
@@ -72,6 +81,8 @@ type TransferenciaTabState struct {
 	CodigoMovimento string
 	InsumoIDInput   string
 	Itens           []TransferenciaItemState
+	IsSubmitting    bool
+	FeedbackMessage string
 }
 
 func NewTransferenciaTabState() TransferenciaTabState {
@@ -121,7 +132,10 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		state.Transferencia.InsumoIDInput = filtered
 	}
 
-	status := NewStatusView(state.Window, "")
+	status := NewStatusView(state.Window, state.Transferencia.FeedbackMessage)
+	if api.TransferDryRunEnabled() {
+		setTransferStatus(state, status, "Modo seguro ativo: TRANSFER_DRY_RUN=true. O envio real ao Sienge esta bloqueado.")
+	}
 	addButton := widget.NewButton("Adicionar Insumo", func() {
 		state.ActiveTab = TabTransferencia
 		status.SetText(StatusLoading)
@@ -165,47 +179,58 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		})
 	})
 
-	sendButton := widget.NewButton("Enviar Transferencia", func() {
+	sendButtonViewModel := BuildTransferSubmitButtonViewModel()
+	var sendButton *widget.Button
+	sendButton = NewSuccessButton(sendButtonViewModel.Label, func() {
+		if state.Transferencia.IsSubmitting {
+			setTransferStatus(state, status, "Transferencia ja esta em envio. Aguarde a conclusao.")
+			return
+		}
 		state.ActiveTab = TabTransferencia
 		transfer, err := BuildTransferenciaFromState(state)
 		if err != nil {
-			status.SetText(err.Error())
+			setTransferStatus(state, status, err.Error())
 			return
 		}
 		ShowConfirmTransferModal(state.Window, transfer, func() {
-			status.SetText(StatusLoading)
+			setTransferStatus(state, status, StatusLoading)
+			sendButton.Disable()
 			movementID := ""
 			state.Runner.Run(func() error {
 				var err error
 				movementID, err = SendTransferencia(context.Background(), state)
 				return err
 			}, func(err error) {
+				sendButton.Enable()
 				if err != nil {
 					if MaybeShowCredentialReonboarding(state, err, status.SetText) {
 						return
 					}
-					status.SetText("Erro ao enviar transferencia: " + err.Error())
+					setTransferStatus(state, status, "Erro ao enviar transferencia: "+err.Error())
 					return
 				}
-				status.SetText(TransferSuccessFeedback(movementID))
+				setTransferStatus(state, status, TransferSuccessFeedback(movementID))
 				state.RefreshTab(TabTransferencia)
 			})
 		})
 	})
+	if state.Transferencia.IsSubmitting || api.TransferDryRunEnabled() {
+		sendButton.Disable()
+	}
 
 	recalculateButton := widget.NewButton("Recalcular saldos", func() {
-		status.SetText(StatusLoading)
+		setTransferStatus(state, status, StatusLoading)
 		state.Runner.Run(func() error {
-			return RecalculateTransferSaldos(context.Background(), state)
+			return HandleRecalculateTrigger(context.Background(), state, -1, RecalculateByButton)
 		}, func(err error) {
 			if err != nil {
 				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
 					return
 				}
-				status.SetText(err.Error())
+				setTransferStatus(state, status, "Nao foi possivel recalcular os saldos: "+err.Error())
 				return
 			}
-			status.SetText("Saldos recalculados.")
+			setTransferStatus(state, status, "Saldos recalculados com sucesso.")
 			state.RefreshTab(TabTransferencia)
 		})
 	})
@@ -243,19 +268,42 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 			}
 			_ = SetTransferItemDestinationAppropriation(state, rowIndex, value)
 		}
-		quantityEntry := widget.NewEntry()
+		var quantityEntry *QuantityEntry
+		quantityEntry = NewQuantityEntry(func(value string) {
+			if rowIndex < 0 || rowIndex >= len(state.Transferencia.Itens) {
+				return
+			}
+			state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value
+			setTransferStatus(state, status, StatusLoading)
+			state.Runner.Run(func() error {
+				return HandleRecalculateTrigger(context.Background(), state, rowIndex, RecalculateByQuantityFocusLost)
+			}, func(err error) {
+				if err != nil {
+					if MaybeShowCredentialReonboarding(state, err, status.SetText) {
+						return
+					}
+					setTransferStatus(state, status, transferRecalculateErrorFeedback(err))
+					return
+				}
+				if rowIndex >= 0 && rowIndex < len(state.Transferencia.Itens) {
+					quantityEntry.SetText(state.Transferencia.Itens[rowIndex].QuantidadeTransferir)
+				}
+				setTransferStatus(state, status, "Saldos recalculados.")
+				state.RefreshTab(TabTransferencia)
+			})
+		})
 		quantityEntry.SetPlaceHolder("Qtd.")
 		quantityEntry.SetText(item.QuantidadeTransferir)
 		quantityEntry.OnChanged = func(value string) { state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value }
 		quantityEntry.OnSubmitted = func(value string) {
 			formatted, _, err := NormalizeQuantityInput(value)
 			if err != nil {
-				status.SetText("Quantidade invalida.")
+				setTransferStatus(state, status, transferRecalculateErrorFeedback(err))
 				return
 			}
 			quantityEntry.SetText(formatted)
 			state.Transferencia.Itens[rowIndex].QuantidadeTransferir = formatted
-			status.SetText("Quantidade atualizada. Confira os saldos recalculados.")
+			setTransferStatus(state, status, "Quantidade atualizada. Confira os saldos recalculados.")
 		}
 		removeButton := widget.NewButton("Remover", func() {
 			_ = RemoveTransferItem(state, rowIndex)
@@ -300,6 +348,16 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		status.Object(),
 		container.NewHScroll(container.NewVBox(rows...)),
 	)
+}
+
+func setTransferStatus(state *AppState, status *StatusView, message string) {
+	if state != nil {
+		state.Transferencia.FeedbackMessage = message
+		state.Status = message
+	}
+	if status != nil {
+		status.SetText(message)
+	}
 }
 
 func runLoadTransferInsumo(runner AsyncRunner, operation func() (TransferenciaItemState, error), done func(TransferenciaItemState, error)) {
@@ -694,6 +752,12 @@ func hasAppropriation(appropriation models.Apropriacao) bool {
 }
 
 func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
+	release, err := BeginTransferSubmission(state)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	if state.Transfer == nil {
 		return "", errors.New("servico de transferencia nao configurado")
 	}
@@ -729,6 +793,25 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 
 	ClearTransferencia(state)
 	return movementID, nil
+}
+
+func BeginTransferSubmission(state *AppState) (func(), error) {
+	if state == nil {
+		return nil, errors.New("estado da aplicacao nao configurado")
+	}
+	state.transferSubmitMu.Lock()
+	defer state.transferSubmitMu.Unlock()
+
+	if state.Transferencia.IsSubmitting {
+		return nil, errors.New("Transferencia ja esta em envio. Aguarde a conclusao.")
+	}
+	state.Transferencia.IsSubmitting = true
+
+	return func() {
+		state.transferSubmitMu.Lock()
+		defer state.transferSubmitMu.Unlock()
+		state.Transferencia.IsSubmitting = false
+	}, nil
 }
 
 func RecalculateTransferSaldos(ctx context.Context, state *AppState) error {
@@ -777,6 +860,37 @@ func RecalculateTransferSaldos(ctx context.Context, state *AppState) error {
 		}
 	}
 	return nil
+}
+
+func HandleRecalculateTrigger(ctx context.Context, state *AppState, itemIndex int, trigger RecalculateTrigger) error {
+	if state == nil {
+		return errors.New("estado da aplicacao nao configurado")
+	}
+	if trigger == RecalculateByQuantityFocusLost {
+		if itemIndex < 0 || itemIndex >= len(state.Transferencia.Itens) {
+			return errors.New("insumo da transferencia nao encontrado")
+		}
+		formatted, quantity, err := NormalizeQuantityInput(state.Transferencia.Itens[itemIndex].QuantidadeTransferir)
+		if err != nil {
+			return err
+		}
+		if available := state.Transferencia.Itens[itemIndex].QuantidadeDisponivel; available > 0 && quantity > available {
+			return ErrTransferQuantityGreaterThanAvailable
+		}
+		state.Transferencia.Itens[itemIndex].QuantidadeTransferir = formatted
+	}
+
+	return RecalculateTransferSaldos(ctx, state)
+}
+
+func transferRecalculateErrorFeedback(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, ErrQuantityRequired) || errors.Is(err, ErrQuantityInvalidFormat) || errors.Is(err, ErrQuantityMustBePositive) || errors.Is(err, ErrTransferQuantityGreaterThanAvailable) {
+		return err.Error()
+	}
+	return "Nao foi possivel recalcular os saldos: " + err.Error()
 }
 
 func RevalidateTransferBeforeSend(ctx context.Context, state *AppState, transfer models.Transferencia) error {
