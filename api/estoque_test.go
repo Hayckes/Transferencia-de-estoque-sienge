@@ -28,6 +28,8 @@ func TestGetStockItemsCallsCurrentEndpointAndParsesItems(t *testing.T) {
 					"resourceName": "Cimento",
 					"detailDescription": "CP III",
 					"trademarkDescription": "Votorantim",
+					"password": "segredo",
+					"nested": {"token": "abc123"},
 					"quantity": 150,
 					"unitOfMeasure": "SC"
 				},
@@ -61,6 +63,27 @@ func TestGetStockItemsCallsCurrentEndpointAndParsesItems(t *testing.T) {
 	}
 	if items[0].OriginalJSON == "" {
 		t.Fatal("OriginalJSON should keep raw item data")
+	}
+	if strings.Contains(items[0].OriginalJSON, "segredo") || strings.Contains(items[0].OriginalJSON, "abc123") {
+		t.Fatalf("OriginalJSON contains sensitive values: %s", items[0].OriginalJSON)
+	}
+}
+
+func TestParsePurchaseRequestItemsSanitizesOriginalJSON(t *testing.T) {
+	items, err := parsePurchaseRequestItems([]byte(`{
+		"results": [
+			{"resourceId": 3421, "resourceName": "Cimento", "password": "segredo", "nested": {"authorization": "Bearer abc"}}
+		]
+	}`), 99, 121)
+	if err != nil {
+		t.Fatalf("parsePurchaseRequestItems() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	original := string(items[0].OriginalJSON)
+	if strings.Contains(original, "segredo") || strings.Contains(original, "Bearer abc") {
+		t.Fatalf("OriginalJSON contains sensitive values: %s", original)
 	}
 }
 

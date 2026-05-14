@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/xuri/excelize/v2"
@@ -99,7 +100,7 @@ func (s Store) RebuildExcel(history []models.Transferencia) error {
 		}
 	}
 
-	return file.SaveAs(s.ExcelPath())
+	return saveExcelAtomically(file, s.ExcelPath())
 }
 
 func (s Store) AppendTransferToExcel(transfer models.Transferencia) error {
@@ -139,7 +140,26 @@ func (s Store) AppendTransferToExcel(transfer models.Transferencia) error {
 		nextRow++
 	}
 
-	return file.SaveAs(s.ExcelPath())
+	return saveExcelAtomically(file, s.ExcelPath())
+}
+
+func saveExcelAtomically(file *excelize.File, path string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*.xlsx")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	defer os.Remove(tmpName)
+
+	if err := file.SaveAs(tmpName); err != nil {
+		return err
+	}
+	return replaceFile(tmpName, path)
 }
 
 func writeExcelHeaders(file *excelize.File) error {

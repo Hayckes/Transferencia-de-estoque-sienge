@@ -157,6 +157,12 @@ func TestBuildTransferNoteIncludesRequiredContextAndNoSecrets(t *testing.T) {
 	if strings.Contains(strings.ToLower(note), "senha") || strings.Contains(strings.ToLower(note), "token") {
 		t.Fatalf("note contains sensitive word: %q", note)
 	}
+	if strings.Contains(note, "/n") {
+		t.Fatalf("note contains escaped newline typo: %q", note)
+	}
+	if !strings.Contains(note, "\n3421 - Cimento") {
+		t.Fatalf("note = %q, want item on a new line", note)
+	}
 }
 
 func TestCreateStockTransferPostsPayloadAndExtractsIDFromBody(t *testing.T) {

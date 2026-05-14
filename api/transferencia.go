@@ -192,7 +192,7 @@ func BuildTransferNote(transfer models.Transferencia) string {
 	itemParts := make([]string, 0, len(transfer.Insumos))
 	for _, item := range transfer.Insumos {
 		itemParts = append(itemParts, fmt.Sprintf(
-			"/n%d - %s %s - %s\n Apropriacao origem %s\n Apropriacao destino %s\n Quantidade transferida %s\n",
+			"\n%d - %s %s - %s\n Apropriacao origem %s\n Apropriacao destino %s\n Quantidade transferida %s\n",
 			item.ID,
 			strings.TrimSpace(item.Nome),
 			strings.TrimSpace(item.Detalhe),

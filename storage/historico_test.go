@@ -2,9 +2,11 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +74,40 @@ func TestWriteHistoryWithNilWritesEmptyArray(t *testing.T) {
 	}
 	if len(history) != 0 {
 		t.Fatalf("len(history) = %d, want 0", len(history))
+	}
+}
+
+func TestWriteHistoryReplacesExistingFileWithoutTempLeftovers(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.WriteHistory([]models.Transferencia{testTransfer("MOV-1")}); err != nil {
+		t.Fatalf("WriteHistory(first) error = %v", err)
+	}
+	if err := store.WriteHistory([]models.Transferencia{testTransfer("MOV-2")}); err != nil {
+		t.Fatalf("WriteHistory(second) error = %v", err)
+	}
+
+	history, err := store.ReadHistory()
+	if err != nil {
+		t.Fatalf("ReadHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].IDMovimento != "MOV-2" {
+		t.Fatalf("history = %#v, want only MOV-2", history)
+	}
+	entries, err := os.ReadDir(store.Dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp-") {
+			t.Fatalf("temporary file left behind: %s", entry.Name())
+		}
+	}
+}
+
+func TestEnsureDirRejectsEmptyDirectory(t *testing.T) {
+	err := NewStore("").EnsureDir()
+	if !errors.Is(err, ErrInvalidStoreDir) {
+		t.Fatalf("EnsureDir() error = %v, want ErrInvalidStoreDir", err)
 	}
 }
 

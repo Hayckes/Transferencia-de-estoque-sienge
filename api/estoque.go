@@ -238,7 +238,7 @@ func parseStockItems(body []byte) ([]models.Insumo, error) {
 		detailID, _ := getInt(object, "detailId", "resourceDetailId")
 		trademarkID, _ := getInt(object, "trademarkId", "brandId", "resourceTrademarkId", "resourceBrandId")
 		averagePrice, _ := getFloat(object, "averagePrice", "unitPrice")
-		original, _ := json.Marshal(object)
+		original, _ := json.Marshal(sanitizeJSONValue(object))
 
 		items = append(items, models.Insumo{
 			ID:           id,

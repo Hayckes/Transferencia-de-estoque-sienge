@@ -45,7 +45,7 @@ func (s Store) createKey() ([]byte, error) {
 		return nil, err
 	}
 
-	if err := os.WriteFile(s.SecretKeyPath(), key, 0o600); err != nil {
+	if err := writeFileAtomically(s.SecretKeyPath(), key, 0o600); err != nil {
 		return nil, err
 	}
 

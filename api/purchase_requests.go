@@ -63,7 +63,7 @@ func parsePurchaseRequestItems(body []byte, purchaseRequestID int, buildingID in
 		detailID, _ := getIntFlexible(object, "detailId", "resourceDetailId")
 		brandID, _ := getIntFlexible(object, "brandId", "trademarkId", "resourceBrandId")
 		quantity, _ := getFloat(object, "quantity", "quantidade", "requestedQuantity", "purchaseQuantity")
-		original, _ := json.Marshal(object)
+		original, _ := json.Marshal(sanitizeJSONValue(object))
 
 		items = append(items, models.PurchaseRequestItem{
 			PurchaseRequestID: purchaseRequestID,
