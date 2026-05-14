@@ -13,6 +13,7 @@ const (
 	TabObras         = "Obras"
 	TabConsulta      = "Consulta"
 	TabTransferencia = "Transferencia"
+	TabEmprestimos   = "Emprestimos"
 	TabHistorico     = "Historico"
 )
 
@@ -25,12 +26,14 @@ type AppState struct {
 	Transfer         TransferService
 	TransferStore    TransferStorage
 	HistoryStore     HistoryStorage
+	LoanStore        LoanStorage
 	FileOpener       FileOpener
 	Status           string
 	ActiveTab        string
 	Obras            ObrasTabState
 	Consulta         ConsultaTabState
 	Transferencia    TransferenciaTabState
+	Emprestimos      EmprestimosTabState
 	Historico        HistoricoTabState
 	Runner           AsyncRunner
 	Window           fyne.Window
@@ -68,6 +71,14 @@ type HistoryStorage interface {
 	ExcelPath() string
 }
 
+type LoanStorage interface {
+	ListLoans() ([]models.LoanRecord, error)
+	SaveAllLoans([]models.LoanRecord) error
+	UpsertLoan(models.LoanRecord) error
+	GetLoanByID(id string) (models.LoanRecord, error)
+	UpdateLoanAfterReturn(returnTransfer models.Transferencia) error
+}
+
 type FileOpener interface {
 	Open(path string) error
 }
@@ -86,6 +97,7 @@ func NewAppState(cfg models.Config) *AppState {
 		Obras:         NewObrasTabState(cfg),
 		Consulta:      NewConsultaTabState(),
 		Transferencia: NewTransferenciaTabState(),
+		Emprestimos:   NewEmprestimosTabState(),
 		Historico:     NewHistoricoTabState(),
 		Runner:        NewAsyncRunner(func(fn func()) { fn() }),
 	}

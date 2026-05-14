@@ -73,22 +73,26 @@ func (item TransferenciaItemState) selectedDestinationAppropriation() models.Apr
 }
 
 type TransferenciaTabState struct {
-	ObraOrigem      string
-	ObraDestino     string
-	Solicitante     string
-	Observacao      string
-	CodigoDocumento string
-	CodigoMovimento string
-	InsumoIDInput   string
-	Itens           []TransferenciaItemState
-	IsSubmitting    bool
-	FeedbackMessage string
+	ObraOrigem              string
+	ObraDestino             string
+	Solicitante             string
+	Observacao              string
+	CodigoDocumento         string
+	CodigoMovimento         string
+	InsumoIDInput           string
+	TransferKind            models.TransferKind
+	SelectedLoanID          string
+	AvailableLoansForReturn []models.LoanRecord
+	Itens                   []TransferenciaItemState
+	IsSubmitting            bool
+	FeedbackMessage         string
 }
 
 func NewTransferenciaTabState() TransferenciaTabState {
 	return TransferenciaTabState{
 		CodigoDocumento: "TR",
 		CodigoMovimento: "3",
+		TransferKind:    models.TransferKindNotApplicable,
 	}
 }
 
@@ -133,8 +137,53 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	}
 
 	status := NewStatusView(state.Window, state.Transferencia.FeedbackMessage)
+	loadReturnLoans(state)
 	if api.TransferDryRunEnabled() {
 		setTransferStatus(state, status, "Modo seguro ativo: TRANSFER_DRY_RUN=true. O envio real ao Sienge esta bloqueado.")
+	}
+	initializingLoanSelect := true
+	loanSelect := widget.NewSelect(LoanReturnOptionLabels(state.Transferencia.AvailableLoansForReturn), func(value string) {
+		if initializingLoanSelect {
+			return
+		}
+		loan, ok := LoanByReturnOptionLabel(state.Transferencia.AvailableLoansForReturn, value)
+		if !ok {
+			state.Transferencia.SelectedLoanID = ""
+			return
+		}
+		PrepareTransferReturnFromLoan(state, loan, loan.PendingItems())
+		setTransferStatus(state, status, "Emprestimo selecionado para devolucao. Revise os saldos antes de enviar.")
+		state.RefreshTab(TabTransferencia)
+	})
+	loanSelect.PlaceHolder = "Emprestimo para devolver (opcional)"
+	if state.Transferencia.SelectedLoanID != "" {
+		if loan, ok := LoanByID(state.Transferencia.AvailableLoansForReturn, state.Transferencia.SelectedLoanID); ok {
+			loanSelect.SetSelected(LoanReturnOptionLabel(loan))
+		}
+	}
+	initializingTransferKind := true
+	transferKindRadio := widget.NewRadioGroup(TransferKindLabels(), func(value string) {
+		if initializingTransferKind {
+			return
+		}
+		state.Transferencia.TransferKind = models.TransferKindFromLabel(value)
+		if state.Transferencia.TransferKind == models.TransferKindReturn {
+			loadReturnLoans(state)
+			if len(state.Transferencia.AvailableLoansForReturn) == 0 {
+				setTransferStatus(state, status, "Nao ha emprestimos pendentes ou parcialmente devolvidos para devolucao.")
+			}
+		} else {
+			state.Transferencia.SelectedLoanID = ""
+		}
+		state.RefreshTab(TabTransferencia)
+	})
+	transferKindRadio.Horizontal = true
+	transferKindRadio.SetSelected(models.TransferKindLabel(effectiveTransferKindState(state)))
+	initializingTransferKind = false
+	initializingLoanSelect = false
+	loanSelectorSection := container.NewVBox(widget.NewLabel("Emprestimo vinculado"), expandingInput(loanSelect))
+	if effectiveTransferKindState(state) != models.TransferKindReturn {
+		loanSelectorSection.Hide()
 	}
 	addButton := widget.NewButton("Adicionar Insumo", func() {
 		state.ActiveTab = TabTransferencia
@@ -336,11 +385,13 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	})
 
 	workRow := container.NewGridWithColumns(2, origemSelect, destinoSelect)
+	typeSection := container.NewVBox(widget.NewLabel("Tipo da transferencia"), transferKindRadio, loanSelectorSection)
 	requesterRow := container.NewBorder(nil, nil, nil, container.NewHBox(widget.NewLabel("Documento: TR"), withMinObjectWidth(movimentoEntry, 180)), solicitanteEntry)
 	itemInputRow := container.NewBorder(nil, nil, nil, container.NewHBox(addButton, recalculateButton, sendButton, clearButton), insumoEntry)
 
 	return scrollablePage(
 		widget.NewLabel("Transferencia de insumos"),
+		typeSection,
 		workRow,
 		requesterRow,
 		observacaoEntry,
@@ -653,6 +704,8 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 		ObraDestinoNome:     ObraNameByID(state.Config.Obras, destinationID),
 		CodigoTipoDocumento: "TR",
 		CodigoTipoMovimento: movementCode,
+		TransferKind:        effectiveTransferKindState(state),
+		LinkedLoanID:        strings.TrimSpace(state.Transferencia.SelectedLoanID),
 		Insumos:             items,
 	}
 	if validationErrors := ValidateTransferenciaState(transfer); len(validationErrors) > 0 {
@@ -772,8 +825,14 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 	if err := RevalidateTransferBeforeSend(ctx, state, transfer); err != nil {
 		return "", err
 	}
+	if err := ValidateLoanReturnBeforeSend(state, transfer); err != nil {
+		return "", err
+	}
 	transfer, err = BuildTransferenciaFromState(state)
 	if err != nil {
+		return "", err
+	}
+	if err := ValidateLoanReturnBeforeSend(state, transfer); err != nil {
 		return "", err
 	}
 	movementID, err := state.Transfer.CreateStockTransfer(ctx, transfer)
@@ -781,11 +840,15 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 		return "", err
 	}
 	transfer.IDMovimento = movementID
+	applyLoanSideEffects := PrepareLoanSideEffectsAfterSend(state, &transfer)
 	if err := state.TransferStore.AppendHistory(transfer); err != nil {
 		return "", errors.New(TransferLocalHistoryErrorFeedback(err))
 	}
 	if err := state.TransferStore.AppendTransferToExcel(transfer); err != nil {
 		return "", errors.New("Transferencia enviada com sucesso no Sienge, mas houve erro ao salvar a planilha local: " + err.Error())
+	}
+	if err := applyLoanSideEffects(); err != nil {
+		return "", errors.New("Transferencia enviada com sucesso no Sienge e salva no historico local, mas houve erro ao atualizar emprestimos: " + err.Error())
 	}
 	if state.HistoryStore != nil {
 		_ = RefreshHistorico(state)

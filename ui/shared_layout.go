@@ -27,7 +27,11 @@ func withMinObjectWidth(input fyne.CanvasObject, minWidth float32) fyne.CanvasOb
 }
 
 func scrollablePage(objects ...fyne.CanvasObject) fyne.CanvasObject {
-	return container.NewVScroll(container.NewPadded(container.NewVBox(objects...)))
+	return flexibleScroll(container.NewPadded(container.NewVBox(objects...)))
+}
+
+func flexibleScroll(content fyne.CanvasObject) fyne.CanvasObject {
+	return container.NewScroll(content)
 }
 
 func responsiveRow(objects ...fyne.CanvasObject) fyne.CanvasObject {

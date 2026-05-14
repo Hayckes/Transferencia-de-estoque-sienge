@@ -55,6 +55,10 @@ var ExcelHeaders = []string{
 	"Marca ID",
 	"Unidade",
 	"Preco Unitario",
+	"Tipo da Transferencia",
+	"ID do Emprestimo",
+	"Status do Emprestimo",
+	"E Devolucao de Emprestimo",
 }
 
 func (s Store) EnsureExcelFromHistory() error {
@@ -199,7 +203,11 @@ func writeExcelHeaders(file *excelize.File) error {
 	if err := file.SetPanes(excelSheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"}); err != nil {
 		return err
 	}
-	if err := file.SetColWidth(excelSheetName, "A", "AL", 18); err != nil {
+	lastColumn, err := excelize.ColumnNumberToName(len(ExcelHeaders))
+	if err != nil {
+		return err
+	}
+	if err := file.SetColWidth(excelSheetName, "A", lastColumn, 18); err != nil {
 		return err
 	}
 
@@ -246,6 +254,10 @@ func writeExcelRow(file *excelize.File, row int, transfer models.Transferencia, 
 		item.MarcaID,
 		item.Unidade,
 		item.PrecoUnitario,
+		models.TransferKindLabel(transfer.TransferKind),
+		transfer.LinkedLoanID,
+		loanStatusForExcel(transfer),
+		models.EffectiveTransferKind(transfer.TransferKind) == models.TransferKindReturn && transfer.LinkedLoanID != "",
 	}
 
 	for index, value := range values {
@@ -259,6 +271,13 @@ func writeExcelRow(file *excelize.File, row int, transfer models.Transferencia, 
 	}
 
 	return nil
+}
+
+func loanStatusForExcel(transfer models.Transferencia) string {
+	if models.EffectiveTransferKind(transfer.TransferKind) == models.TransferKindNotApplicable || transfer.LoanStatus == "" {
+		return "Nao se aplica"
+	}
+	return models.LoanStatusLabel(transfer.LoanStatus)
 }
 
 func notApplicableString(values ...string) string {

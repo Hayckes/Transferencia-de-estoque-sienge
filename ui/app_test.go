@@ -83,6 +83,18 @@ func TestBuildMainTabsPreservesSelectedTab(t *testing.T) {
 	}
 }
 
+const compactWindowMaxMinWidth float32 = 520
+
+func TestBuildMainTabsAllowsCompactWindowWidth(t *testing.T) {
+	state := NewAppState(testConfig())
+	state.Transferencia.Itens = validTransferStateWithItem().Transferencia.Itens
+
+	minSize := BuildMainTabs(state).MinSize()
+	if minSize.Width > compactWindowMaxMinWidth {
+		t.Fatalf("BuildMainTabs().MinSize().Width = %v, want at most %v", minSize.Width, compactWindowMaxMinWidth)
+	}
+}
+
 func TestWithMinTypingInputWidthEnforcesMinimumWidth(t *testing.T) {
 	entry := widget.NewEntry()
 	wrapped := withMinTypingInputWidth(entry)

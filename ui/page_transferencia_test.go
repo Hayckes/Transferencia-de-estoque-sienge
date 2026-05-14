@@ -76,6 +76,13 @@ func TestAddTransferInsumoAddsSingleItemWithAppropriations(t *testing.T) {
 	}
 }
 
+func TestBuildTransferenciaTabAllowsCompactWidthWithItems(t *testing.T) {
+	minSize := BuildTransferenciaTab(validTransferStateWithItem()).MinSize()
+	if minSize.Width > compactWindowMaxMinWidth {
+		t.Fatalf("BuildTransferenciaTab().MinSize().Width = %v, want at most %v", minSize.Width, compactWindowMaxMinWidth)
+	}
+}
+
 func TestLoadTransferInsumoBuildsItemWithoutMutatingState(t *testing.T) {
 	stock := &fakeStockService{
 		items: []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC", Quantidade: 150}},

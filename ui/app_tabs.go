@@ -26,6 +26,7 @@ func BuildMainTabs(state *AppState) *container.AppTabs {
 		container.NewTabItem(TabObras, BuildObrasTab(state)),
 		container.NewTabItem(TabConsulta, BuildConsultaTab(state)),
 		container.NewTabItem(TabTransferencia, BuildTransferenciaTab(state)),
+		container.NewTabItem(TabEmprestimos, BuildEmprestimosTab(state)),
 		container.NewTabItem(TabHistorico, BuildHistoricoTab(state)),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
