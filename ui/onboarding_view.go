@@ -10,11 +10,15 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
+	"sienge-transfer/api"
 	"sienge-transfer/models"
 )
 
 func BuildFatalErrorContent(message string) fyne.CanvasObject {
-	return container.NewCenter(widget.NewLabel(message))
+	label := widget.NewLabel(message)
+	label.Wrapping = fyne.TextWrapWord
+	label.Selectable = true
+	return container.NewVScroll(container.NewCenter(container.NewPadded(label)))
 }
 
 func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(configLoaded)) fyne.CanvasObject {
@@ -22,8 +26,9 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 	var credentials CredentialsInput
 	var user UserInput
 	var obras []models.Obra
+	var costCenterService CostCenterService
 
-	status := widget.NewLabel("")
+	status := NewStatusView(window, "")
 	content := container.NewVBox()
 
 	var showStep1 func()
@@ -42,11 +47,11 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Credenciais Sienge"),
-			empresa,
-			subdominio,
-			usuario,
-			senha,
-			status,
+			expandingInput(empresa),
+			expandingInput(subdominio),
+			expandingInput(usuario),
+			expandingInput(senha),
+			status.Object(),
 			widget.NewButton("Validar e continuar", func() {
 				credentials = CredentialsInput{EmpresaNome: empresa.Text, Subdominio: subdominio.Text, APIUsuario: usuario.Text, APISenha: senha.Text}
 				empresaModel, err := ValidateCredentialsInput(credentials)
@@ -62,6 +67,12 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 							status.SetText("Credenciais nao validadas: " + err.Error())
 							return
 						}
+						client, clientErr := api.NewClient(empresaModel.Subdominio, empresaModel.APIUsuario, empresaModel.APISenha)
+						if clientErr != nil {
+							status.SetText(clientErr.Error())
+							return
+						}
+						costCenterService = client
 						status.SetText("")
 						showStep2()
 					})
@@ -78,10 +89,10 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 		cargo.SetPlaceHolder("Cargo/Função")
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Usuario"),
-			nome,
-			cargo,
-			status,
-			container.NewHBox(
+			expandingInput(nome),
+			expandingInput(cargo),
+			status.Object(),
+			responsiveRow(
 				widget.NewButton("Voltar", showStep1),
 				widget.NewButton("Continuar", func() {
 					user = UserInput{Nome: nome.Text, Cargo: cargo.Text}
@@ -99,17 +110,28 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 
 	showStep3 = func() {
 		idEntry := widget.NewEntry()
-		idEntry.SetPlaceHolder("ID da obra")
-		nomeEntry := widget.NewEntry()
-		nomeEntry.SetPlaceHolder("Nome da obra")
-		lista := widget.NewLabel(worksListText(obras))
+		idEntry.SetPlaceHolder("ID do centro de custo")
+		lista := selectableWrappedLabel(worksListText(obras))
 		add := func() {
+			if costCenterService == nil {
+				status.SetText("servico de centro de custo nao configurado")
+				return
+			}
 			id, err := strconv.Atoi(strings.TrimSpace(idEntry.Text))
 			if err != nil || id <= 0 {
 				status.SetText("ID da obra deve ser numerico positivo")
 				return
 			}
-			nova := models.Obra{ID: id, Nome: strings.TrimSpace(nomeEntry.Text)}
+			centers, err := costCenterService.GetCostCenters(context.Background(), id)
+			if err != nil {
+				status.SetText(err.Error())
+				return
+			}
+			if len(centers) == 0 {
+				status.SetText("centro de custo nao encontrado no Sienge")
+				return
+			}
+			nova := centers[0]
 			validated, err := ValidateWorksInput(WorksInput{Obras: append(append([]models.Obra(nil), obras...), nova)})
 			if err != nil {
 				status.SetText(err.Error())
@@ -117,17 +139,16 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 			}
 			obras = validated
 			idEntry.SetText("")
-			nomeEntry.SetText("")
 			lista.SetText(worksListText(obras))
 			status.SetText("")
 		}
 
 		content.Objects = []fyne.CanvasObject{
 			widget.NewLabel("Configuracao inicial - Obras"),
-			container.NewHBox(idEntry, nomeEntry, widget.NewButton("+ Adicionar outra obra", add)),
+			responsiveRow(expandingInput(idEntry), widget.NewButton("+ Adicionar outra obra", add)),
 			lista,
-			status,
-			container.NewHBox(
+			status.Object(),
+			responsiveRow(
 				widget.NewButton("Voltar", showStep2),
 				widget.NewButton("Concluir", func() {
 					cfg, err := service.Complete(context.Background(), CompleteOnboardingInput{Credentials: credentials, User: user, Works: WorksInput{Obras: obras}})
@@ -145,7 +166,7 @@ func BuildOnboardingContent(window fyne.Window, store ConfigStore, done func(con
 	}
 
 	showStep1()
-	return container.NewCenter(container.NewPadded(content))
+	return container.NewVScroll(container.NewCenter(container.NewPadded(content)))
 }
 
 func worksListText(obras []models.Obra) string {

@@ -18,12 +18,35 @@ func TestNewClientBuildsBaseURLAndTimeout(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	wantBaseURL := "https://minhaempresa.sienge.com.br/sienge/api/public/v1"
+	wantBaseURL := "https://api.sienge.com.br/minhaempresa/public/api/v1"
 	if client.BaseURL() != wantBaseURL {
 		t.Fatalf("BaseURL() = %q, want %q", client.BaseURL(), wantBaseURL)
 	}
 	if client.httpClient.Timeout != DefaultTimeout {
 		t.Fatalf("Timeout = %v, want %v", client.httpClient.Timeout, DefaultTimeout)
+	}
+}
+
+func TestNewSiengeAPIBaseURLAcceptsOnlySafeSubdomain(t *testing.T) {
+	apiURL, err := NewSiengeAPIBaseURL("produtoeinovacao")
+	if err != nil {
+		t.Fatalf("NewSiengeAPIBaseURL() error = %v", err)
+	}
+	if apiURL.String() != "https://api.sienge.com.br/produtoeinovacao/public/api/v1" {
+		t.Fatalf("url = %q, want public API URL", apiURL.String())
+	}
+
+	for _, subdomain := range []string{
+		"https://produtoeinovacao.sienge.com.br/sienge/",
+		"produtoeinovacao/sienge/api/public/v1",
+		"produtoeinovacao/internal-api",
+		"produtoeinovacao?x=1",
+	} {
+		t.Run(subdomain, func(t *testing.T) {
+			if _, err := NewSiengeAPIBaseURL(subdomain); err == nil {
+				t.Fatal("NewSiengeAPIBaseURL() error = nil, want rejection")
+			}
+		})
 	}
 }
 
@@ -50,13 +73,13 @@ func TestNewClientWithBaseURLValidatesRequiredFields(t *testing.T) {
 	}
 }
 
-func TestValidateCredentialsUsesBuildingsEndpointAndBasicAuth(t *testing.T) {
+func TestValidateCredentialsUsesCostCenterEndpointAndBasicAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("method = %s, want GET", r.Method)
 		}
-		if r.URL.String() != "/sienge/api/public/v1/buildings?limit=1" {
-			t.Fatalf("URL = %s, want /sienge/api/public/v1/buildings?limit=1", r.URL.String())
+		if r.URL.String() != "/public/api/v1/cost-centers/1" {
+			t.Fatalf("URL = %s, want /public/api/v1/cost-centers/1", r.URL.String())
 		}
 
 		wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("usuario:senha"))
@@ -68,7 +91,20 @@ func TestValidateCredentialsUsesBuildingsEndpointAndBasicAuth(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"results":[]}`))
+		_, _ = w.Write([]byte(`{"id":1,"description":"Centro de Custo"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	if err := client.ValidateCredentials(context.Background()); err != nil {
+		t.Fatalf("ValidateCredentials() error = %v", err)
+	}
+}
+
+func TestValidateCredentialsAcceptsCostCenterNotFoundAsValidAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not found"}`))
 	}))
 	defer server.Close()
 
@@ -85,7 +121,6 @@ func TestValidateCredentialsMapsHTTPStatuses(t *testing.T) {
 	}{
 		{statusCode: http.StatusUnauthorized, wantText: "Credenciais invalidas"},
 		{statusCode: http.StatusForbidden, wantText: "Credenciais invalidas"},
-		{statusCode: http.StatusNotFound, wantText: "Recurso nao encontrado"},
 		{statusCode: http.StatusUnprocessableEntity, wantText: "Dados invalidos"},
 		{statusCode: http.StatusInternalServerError, wantText: "Erro no servidor"},
 	}
@@ -145,8 +180,8 @@ func TestPostJSONSendsJSONPayloadAndHeaders(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if r.URL.String() != "/sienge/api/public/v1/stock-transfers" {
-			t.Fatalf("URL = %s, want /sienge/api/public/v1/stock-transfers", r.URL.String())
+		if r.URL.String() != "/public/api/v1/stock-transfers" {
+			t.Fatalf("URL = %s, want /public/api/v1/stock-transfers", r.URL.String())
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("Content-Type = %q, want application/json", r.Header.Get("Content-Type"))
@@ -196,6 +231,28 @@ func TestAPIErrorSanitizesSensitiveJSONBody(t *testing.T) {
 	}
 }
 
+func TestAPIErrorUsesSiengeClientMessageForUnprocessableEntity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte("{\"clientMessage\":\"Item de or\\u00e7amento 15 est\\u00e1 bloqueado para apropria\\u00e7\\u00f5es.\",\"developerMessage\":\"est.message.item.de.orcamento.bloqueado\",\"status\":422}"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	_, err := client.PostJSON(context.Background(), "/stock-transfers", map[string]any{"ok": true})
+	if err == nil {
+		t.Fatal("PostJSON() error = nil, want error")
+	}
+
+	message := err.Error()
+	if !strings.Contains(message, "Item de or\u00e7amento 15 est\u00e1 bloqueado") || !strings.Contains(message, "Selecione outra apropriacao") {
+		t.Fatalf("error = %q, want friendly blocked item message", message)
+	}
+	if strings.Contains(message, "developerMessage") {
+		t.Fatalf("error = %q, should not expose raw JSON when clientMessage is available", message)
+	}
+}
+
 func TestPostJSONRejectsAbsoluteEndpoint(t *testing.T) {
 	client := newTestClient(t, "https://example.com"+BasePath, nil)
 	_, err := client.PostJSON(context.Background(), "https://example.com/stock-transfers", map[string]any{})
@@ -204,8 +261,75 @@ func TestPostJSONRejectsAbsoluteEndpoint(t *testing.T) {
 	}
 }
 
+func TestDoResponseRejectsHTMLSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html>login</html>"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	err := client.ValidateCredentials(context.Background())
+	if err == nil {
+		t.Fatal("ValidateCredentials() error = nil, want HTML response error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ValidateCredentials() error type = %T, want *APIError", err)
+	}
+	if !strings.Contains(apiErr.Message, "formato HTML") {
+		t.Fatalf("Message = %q, want HTML format message", apiErr.Message)
+	}
+}
+
+func TestDoResponseRejectsHTMLByBodyPrefix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("   <!DOCTYPE html><html>login</html>"))
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	err := client.ValidateCredentials(context.Background())
+	if err == nil {
+		t.Fatal("ValidateCredentials() error = nil, want HTML response error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ValidateCredentials() error type = %T, want *APIError", err)
+	}
+	if apiErr.Kind != APIErrorKindHTML || apiErr.Body != "" {
+		t.Fatalf("APIError = %#v, want HTML kind without raw body", apiErr)
+	}
+}
+
+func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/sienge/internal-api/v1/auth/sso/callback?token=secret", http.StatusFound)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL+BasePath, nil)
+	err := client.ValidateCredentials(context.Background())
+	if err == nil {
+		t.Fatal("ValidateCredentials() error = nil, want redirect error")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 redirect response without follow-up", calls)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ValidateCredentials() error type = %T, want *APIError", err)
+	}
+	if apiErr.Kind != APIErrorKindRedirect || strings.Contains(apiErr.Body, "secret") {
+		t.Fatalf("APIError = %#v, want sanitized redirect error", apiErr)
+	}
+}
+
 func newTestClient(t *testing.T, baseURL string, httpClient *http.Client) *Client {
 	t.Helper()
+	resetTransferSafetyStateForTests()
 
 	client, err := NewClientWithBaseURL(baseURL, "usuario", "senha", httpClient)
 	if err != nil {

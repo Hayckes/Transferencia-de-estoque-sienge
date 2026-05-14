@@ -6,7 +6,10 @@ import (
 	"os"
 	"testing"
 
+	"fyne.io/fyne/v2"
 	fynetest "fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"sienge-transfer/api"
 	"sienge-transfer/config"
@@ -25,6 +28,9 @@ func TestNewAppStateInitializesPersistentTabStates(t *testing.T) {
 	if state.Status != "Pronto." {
 		t.Fatalf("Status = %q, want Pronto.", state.Status)
 	}
+	if state.ActiveTab != TabObras {
+		t.Fatalf("ActiveTab = %q, want %q", state.ActiveTab, TabObras)
+	}
 	if state.Obras.UsuarioNome != cfg.Usuario.Nome || state.Obras.UsuarioCargo != cfg.Usuario.Cargo {
 		t.Fatalf("Obras state user = %#v, want config user", state.Obras)
 	}
@@ -39,13 +45,12 @@ func TestNewAppStateInitializesPersistentTabStates(t *testing.T) {
 func TestTabStateIsNotResetWhenContentIsBuiltAgain(t *testing.T) {
 	state := NewAppState(testConfig())
 	state.Consulta.InsumoIDsInput = "3421"
-	state.Consulta.Observacao = "observacao local"
 	state.Transferencia.Solicitante = "Maria Santos"
 
 	_ = BuildMainContent(state)
 	_ = BuildMainContent(state)
 
-	if state.Consulta.InsumoIDsInput != "3421" || state.Consulta.Observacao != "observacao local" {
+	if state.Consulta.InsumoIDsInput != "3421" {
 		t.Fatalf("consulta state was reset: %#v", state.Consulta)
 	}
 	if state.Transferencia.Solicitante != "Maria Santos" {
@@ -61,6 +66,40 @@ func TestBuildMainContentAndTopBarReturnObjects(t *testing.T) {
 	}
 	if BuildMainContent(state) == nil {
 		t.Fatal("BuildMainContent() returned nil")
+	}
+}
+
+func TestBuildMainTabsPreservesSelectedTab(t *testing.T) {
+	state := NewAppState(testConfig())
+	tabs := BuildMainTabs(state)
+	tabs.SelectIndex(1)
+	if state.ActiveTab != TabConsulta {
+		t.Fatalf("ActiveTab after select = %q, want %q", state.ActiveTab, TabConsulta)
+	}
+
+	rebuilt := BuildMainTabs(state)
+	if rebuilt.Selected() == nil || rebuilt.Selected().Text != TabConsulta {
+		t.Fatalf("rebuilt selected tab = %#v, want Consulta", rebuilt.Selected())
+	}
+}
+
+func TestWithMinTypingInputWidthEnforcesMinimumWidth(t *testing.T) {
+	entry := widget.NewEntry()
+	wrapped := withMinTypingInputWidth(entry)
+
+	if wrapped.MinSize().Width < minTypingInputWidth {
+		t.Fatalf("wrapped input width = %v, want at least %v", wrapped.MinSize().Width, minTypingInputWidth)
+	}
+}
+
+func TestWithMinTypingInputWidthUsesPlaceholderWidth(t *testing.T) {
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("IDs dos insumos separados por virgula ou espaco")
+	wrapped := withMinTypingInputWidth(entry)
+	wantMinWidth := widget.NewLabel(entry.PlaceHolder).MinSize().Width + theme.Padding()*placeholderWidthExtraPads
+
+	if wrapped.MinSize().Width < wantMinWidth {
+		t.Fatalf("wrapped input width = %v, want at least placeholder width %v", wrapped.MinSize().Width, wantMinWidth)
 	}
 }
 
@@ -103,6 +142,24 @@ func TestStatusMessageForError(t *testing.T) {
 				t.Fatalf("StatusMessageForError() = %q, want prefix %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStatusViewUsesSelectableWrappedMessageAndActions(t *testing.T) {
+	status := NewStatusView(nil, "")
+	if !status.label.Selectable || status.label.Wrapping != fyne.TextWrapWord {
+		t.Fatalf("status label selectable/wrapping = %v/%v, want selectable word wrap", status.label.Selectable, status.label.Wrapping)
+	}
+	if !status.copyButton.Disabled() || !status.detailsButton.Disabled() {
+		t.Fatal("empty status should disable copy/details actions")
+	}
+
+	status.SetText("Erro detalhado para copiar")
+	if status.copyButton.Disabled() {
+		t.Fatal("non-empty status should enable copy action")
+	}
+	if !status.detailsButton.Disabled() {
+		t.Fatal("details action should stay disabled without a window")
 	}
 }
 

@@ -40,7 +40,7 @@ func ParseInsumoIDs(input string) ([]int, error) {
 }
 
 func FormatQuantidade(value float64, unidade string) string {
-	formatted := strconv.FormatFloat(value, 'f', -1, 64)
+	formatted := strconv.FormatFloat(value, 'f', 4, 64)
 	if strings.TrimSpace(unidade) == "" {
 		return formatted
 	}

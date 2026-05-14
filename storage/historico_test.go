@@ -2,9 +2,11 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,40 @@ func TestWriteHistoryWithNilWritesEmptyArray(t *testing.T) {
 	}
 }
 
+func TestWriteHistoryReplacesExistingFileWithoutTempLeftovers(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.WriteHistory([]models.Transferencia{testTransfer("MOV-1")}); err != nil {
+		t.Fatalf("WriteHistory(first) error = %v", err)
+	}
+	if err := store.WriteHistory([]models.Transferencia{testTransfer("MOV-2")}); err != nil {
+		t.Fatalf("WriteHistory(second) error = %v", err)
+	}
+
+	history, err := store.ReadHistory()
+	if err != nil {
+		t.Fatalf("ReadHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].IDMovimento != "MOV-2" {
+		t.Fatalf("history = %#v, want only MOV-2", history)
+	}
+	entries, err := os.ReadDir(store.Dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp-") {
+			t.Fatalf("temporary file left behind: %s", entry.Name())
+		}
+	}
+}
+
+func TestEnsureDirRejectsEmptyDirectory(t *testing.T) {
+	err := NewStore("").EnsureDir()
+	if !errors.Is(err, ErrInvalidStoreDir) {
+		t.Fatalf("EnsureDir() error = %v, want ErrInvalidStoreDir", err)
+	}
+}
+
 func TestReadHistoryReturnsErrorForCorruptedJSON(t *testing.T) {
 	store := NewStore(t.TempDir())
 	if err := store.EnsureDir(); err != nil {
@@ -138,6 +174,7 @@ func testTransfer(id string) models.Transferencia {
 		Usuario:             "Joao Silva",
 		Cargo:               "Engenheiro",
 		Solicitante:         "Maria Santos",
+		Observacao:          "Observacao de teste",
 		ObraOrigemID:        121,
 		ObraOrigemNome:      "Residencial Novo Horizonte",
 		ObraDestinoID:       205,
@@ -145,8 +182,8 @@ func testTransfer(id string) models.Transferencia {
 		CodigoTipoDocumento: "TR",
 		CodigoTipoMovimento: 3,
 		Insumos: []models.ItemTransferido{
-			{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Apropriacao: "A001", Quantidade: 50},
-			{ID: 9876, Nome: "Areia", Detalhe: "Media", Marca: "Regional", Apropriacao: "A002", Quantidade: 20.5},
+			{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Apropriacao: "A001", ApropriacaoDestino: "D001", Quantidade: 50},
+			{ID: 9876, Nome: "Areia", Detalhe: "Media", Marca: "Regional", Apropriacao: "A002", ApropriacaoDestino: "D002", Quantidade: 20.5},
 		},
 	}
 }

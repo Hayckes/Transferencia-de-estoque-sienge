@@ -5,11 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sienge-transfer/models"
 )
 
 const HistoricoFileName = "historico.json"
+
+var ErrInvalidStoreDir = errors.New("diretorio local nao informado")
 
 type Store struct {
 	Dir string
@@ -30,6 +33,9 @@ func NewStore(dir string) Store {
 }
 
 func (s Store) EnsureDir() error {
+	if strings.TrimSpace(s.Dir) == "" {
+		return ErrInvalidStoreDir
+	}
 	return os.MkdirAll(s.Dir, 0o700)
 }
 
@@ -54,7 +60,7 @@ func (s Store) EnsureHistory() error {
 		return err
 	}
 
-	return os.WriteFile(s.HistoricoPath(), []byte("[]\n"), 0o600)
+	return writeFileAtomically(s.HistoricoPath(), []byte("[]\n"), 0o600)
 }
 
 func (s Store) ReadHistory() ([]models.Transferencia, error) {
@@ -93,7 +99,53 @@ func (s Store) WriteHistory(history []models.Transferencia) error {
 	}
 	data = append(data, '\n')
 
-	return os.WriteFile(s.HistoricoPath(), data, 0o600)
+	return writeFileAtomically(s.HistoricoPath(), data, 0o600)
+}
+
+func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = tmp.Close()
+		}
+		_ = os.Remove(tmpName)
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+
+	return replaceFile(tmpName, path)
+}
+
+func replaceFile(tmpName string, path string) error {
+	if err := os.Rename(tmpName, path); err == nil {
+		return nil
+	} else if _, statErr := os.Stat(path); statErr != nil {
+		return err
+	}
+
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func (s Store) AppendHistory(transfer models.Transferencia) error {

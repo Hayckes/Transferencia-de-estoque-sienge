@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -13,6 +15,20 @@ import (
 )
 
 var ErrInvalidCostCenter = errors.New("ID da obra/centro de custo deve ser numerico positivo")
+
+type BuildingAppropriationQuery struct {
+	CostCenterID int
+	ResourceID   int
+	DetailID     *int
+	TrademarkID  *int
+}
+
+type StockItemKey struct {
+	CostCenterID int
+	ResourceID   int
+	DetailID     int
+	TrademarkID  int
+}
 
 func (c *Client) GetStockItems(ctx context.Context, costCenterID int) ([]models.Insumo, error) {
 	if costCenterID <= 0 {
@@ -56,19 +72,153 @@ func (c *Client) GetStockItemsByIDs(ctx context.Context, costCenterID int, ids [
 }
 
 func (c *Client) GetBuildingAppropriations(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error) {
-	if costCenterID <= 0 {
+	return c.GetBuildingAppropriationsByQuery(ctx, BuildingAppropriationQuery{CostCenterID: costCenterID, ResourceID: resourceID})
+}
+
+func (c *Client) GetBuildingAppropriationsByQuery(ctx context.Context, query BuildingAppropriationQuery) ([]models.Apropriacao, error) {
+	if query.CostCenterID <= 0 {
 		return nil, ErrInvalidCostCenter
 	}
-	if resourceID <= 0 {
+	if query.ResourceID <= 0 {
 		return nil, errors.New("ID do insumo deve ser numerico positivo")
 	}
 
-	body, err := c.do(ctx, "GET", fmt.Sprintf("/stock-inventories/%d/items/%d/building-appropriation", costCenterID, resourceID), nil)
+	body, err := c.do(ctx, "GET", buildBuildingAppropriationPath(query), nil)
 	if err != nil {
 		return nil, err
 	}
 
 	return parseAppropriations(body)
+}
+
+func (c *Client) GetStockAppropriationsWithDescriptions(ctx context.Context, costCenterID, resourceID int) ([]models.Apropriacao, error) {
+	return c.GetStockAppropriationsWithDescriptionsByQuery(ctx, BuildingAppropriationQuery{CostCenterID: costCenterID, ResourceID: resourceID})
+}
+
+func (c *Client) GetStockAppropriationsWithDescriptionsForItem(ctx context.Context, costCenterID int, item models.Insumo) ([]models.Apropriacao, error) {
+	return c.GetStockAppropriationsWithDescriptionsByQuery(ctx, BuildingAppropriationQuery{
+		CostCenterID: costCenterID,
+		ResourceID:   item.ID,
+		DetailID:     positiveIntPtr(item.DetalheID),
+		TrademarkID:  positiveIntPtr(item.MarcaID),
+	})
+}
+
+func (c *Client) GetStockAppropriationsWithDescriptionsByQuery(ctx context.Context, query BuildingAppropriationQuery) ([]models.Apropriacao, error) {
+	appropriations, err := c.GetBuildingAppropriationsByQuery(ctx, query)
+	if err != nil || len(appropriations) == 0 {
+		return appropriations, err
+	}
+
+	debugAppropriationQuery(query, appropriations)
+	sheetItemsByUnit := make(map[int][]costEstimationSheetItem)
+	for index := range appropriations {
+		appropriation := &appropriations[index]
+		if appropriation.BuildingUnitID <= 0 || appropriation.SheetItemID <= 0 {
+			continue
+		}
+
+		items, ok := sheetItemsByUnit[appropriation.BuildingUnitID]
+		if !ok {
+			body, err := c.do(ctx, "GET", fmt.Sprintf("/building-cost-estimations/%d/sheets/%d/items", query.CostCenterID, appropriation.BuildingUnitID), nil)
+			if err != nil {
+				return nil, err
+			}
+			items, err = parseCostEstimationSheetItems(body)
+			if err != nil {
+				return nil, err
+			}
+			sheetItemsByUnit[appropriation.BuildingUnitID] = items
+		}
+
+		if item, ok := findMatchingSheetItem(*appropriation, items); ok && strings.TrimSpace(item.Description) != "" {
+			appropriation.Descricao = item.Description
+			if strings.TrimSpace(appropriation.Referencia) == "" {
+				appropriation.Referencia = item.Reference
+			}
+		}
+	}
+
+	return appropriations, nil
+}
+
+func buildBuildingAppropriationPath(query BuildingAppropriationQuery) string {
+	path := fmt.Sprintf("/stock-inventories/%d/items/%d/building-appropriation", query.CostCenterID, query.ResourceID)
+	params := url.Values{}
+	params.Set("offset", "0")
+	params.Set("limit", "100")
+	if query.DetailID != nil {
+		params.Set("detailId", strconv.Itoa(*query.DetailID))
+	}
+	if query.TrademarkID != nil {
+		params.Set("trademarkId", strconv.Itoa(*query.TrademarkID))
+	}
+	return path + "?" + params.Encode()
+}
+
+func StockItemCacheKey(costCenterID int, item models.Insumo) StockItemKey {
+	return StockItemKey{CostCenterID: costCenterID, ResourceID: item.ID, DetailID: item.DetalheID, TrademarkID: item.MarcaID}
+}
+
+func positiveIntPtr(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func debugAppropriationQuery(query BuildingAppropriationQuery, appropriations []models.Apropriacao) {
+	if strings.ToLower(strings.TrimSpace(os.Getenv("SIENGE_TRANSFER_DEBUG_APPROPRIATIONS"))) != "1" {
+		return
+	}
+	sum := 0.0
+	for _, appropriation := range appropriations {
+		sum += appropriation.Quantidade
+	}
+	fmt.Printf("DEBUG Apropriacoes: url=%s sumAppropriations=%.4f count=%d\n", buildBuildingAppropriationPath(query), sum, len(appropriations))
+}
+
+type costEstimationSheetItem struct {
+	ID          int
+	Reference   string
+	Description string
+}
+
+func parseCostEstimationSheetItems(body []byte) ([]costEstimationSheetItem, error) {
+	objects, err := decodeObjectList(body)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]costEstimationSheetItem, 0, len(objects))
+	for _, object := range objects {
+		id, _ := getInt(object, "id", "itemId", "sheetItemId")
+		items = append(items, costEstimationSheetItem{
+			ID:          id,
+			Reference:   getString(object, "reference", "code", "itemReference", "costEstimationItemReference"),
+			Description: getString(object, "description", "name", "itemDescription"),
+		})
+	}
+
+	return items, nil
+}
+
+func findMatchingSheetItem(appropriation models.Apropriacao, items []costEstimationSheetItem) (costEstimationSheetItem, bool) {
+	for _, item := range items {
+		if item.ID != appropriation.SheetItemID {
+			continue
+		}
+		if appropriation.Referencia != "" && item.Reference != "" && appropriation.Referencia != item.Reference {
+			continue
+		}
+		return item, true
+	}
+	for _, item := range items {
+		if item.ID == appropriation.SheetItemID {
+			return item, true
+		}
+	}
+	return costEstimationSheetItem{}, false
 }
 
 func parseStockItems(body []byte) ([]models.Insumo, error) {
@@ -85,15 +235,21 @@ func parseStockItems(body []byte) ([]models.Insumo, error) {
 		}
 
 		quantity, _ := getFloat(object, "quantity", "availableQuantity", "balance", "stockQuantity")
-		original, _ := json.Marshal(object)
+		detailID, _ := getInt(object, "detailId", "resourceDetailId")
+		trademarkID, _ := getInt(object, "trademarkId", "brandId", "resourceTrademarkId", "resourceBrandId")
+		averagePrice, _ := getFloat(object, "averagePrice", "unitPrice")
+		original, _ := json.Marshal(sanitizeJSONValue(object))
 
 		items = append(items, models.Insumo{
 			ID:           id,
 			Nome:         getString(object, "resourceName", "supplyName", "name", "description"),
 			Detalhe:      getString(object, "detailDescription", "detail", "detailName", "specification"),
+			DetalheID:    detailID,
 			Marca:        getString(object, "trademarkDescription", "brand", "brandName", "trademark"),
+			MarcaID:      trademarkID,
 			Unidade:      getString(object, "unitOfMeasure", "unit", "measureUnit"),
 			Quantidade:   quantity,
+			PrecoMedio:   averagePrice,
 			OriginalJSON: string(original),
 		})
 	}
@@ -110,10 +266,26 @@ func parseAppropriations(body []byte) ([]models.Apropriacao, error) {
 	appropriations := make([]models.Apropriacao, 0, len(objects))
 	for _, object := range objects {
 		quantity, _ := getFloat(object, "quantity", "availableQuantity", "balance", "stockQuantity")
+		buildingUnitID, _ := getInt(object, "buildingUnitId", "buildingUnitID", "unitId")
+		sheetItemID, _ := getInt(object, "sheetItemId", "sheetItemID", "itemId")
+		blocked, _ := getBool(object, "blocked", "locked", "isBlocked", "isLocked", "bloqueado", "blockedForAppropriation", "blockedForAppropriations", "budgetItemBlocked", "isBudgetItemBlocked")
+		reference := getString(object, "costEstimationItemReference", "reference")
+		code := getString(object, "appropriationCode", "buildingAppropriationCode", "costEstimationItemReference", "code", "id")
+		if code == "" && sheetItemID > 0 {
+			code = strconv.Itoa(sheetItemID)
+		}
+		description := getString(object, "appropriationDescription", "buildingAppropriationDescription", "description", "name")
+		if description == "" {
+			description = reference
+		}
 		appropriations = append(appropriations, models.Apropriacao{
-			Codigo:     getString(object, "appropriationCode", "buildingAppropriationCode", "code", "id"),
-			Descricao:  getString(object, "appropriationDescription", "buildingAppropriationDescription", "description", "name"),
-			Quantidade: quantity,
+			Codigo:         code,
+			Descricao:      description,
+			Referencia:     reference,
+			BuildingUnitID: buildingUnitID,
+			SheetItemID:    sheetItemID,
+			Quantidade:     quantity,
+			Bloqueado:      blocked,
 		})
 	}
 
@@ -134,7 +306,7 @@ func decodeObjectList(body []byte) ([]map[string]any, error) {
 	case []any:
 		rawItems = typed
 	case map[string]any:
-		for _, key := range []string{"results", "items", "data"} {
+		for _, key := range []string{"results", "resultados", "items", "data"} {
 			if items, ok := typed[key].([]any); ok {
 				rawItems = items
 				break
@@ -231,6 +403,34 @@ func getFloat(object map[string]any, keys ...string) (float64, bool) {
 	}
 
 	return 0, false
+}
+
+func getBool(object map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok || value == nil {
+			continue
+		}
+
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+			if err == nil {
+				return parsed, true
+			}
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err == nil {
+				return parsed != 0, true
+			}
+		case float64:
+			return typed != 0, true
+		}
+	}
+
+	return false, false
 }
 
 func valueToString(value any) string {

@@ -26,13 +26,19 @@ func TestRebuildExcelCreatesFileWithHeadersAndRows(t *testing.T) {
 	if got := mustCell(t, file, 2, 1); got != "MOV-1" {
 		t.Fatalf("row 2 movement = %q, want MOV-1", got)
 	}
-	if got := mustCell(t, file, 2, 8); got != "3421" {
+	if got := mustCell(t, file, 2, 6); got != "Observacao de teste" {
+		t.Fatalf("row 2 observation = %q, want Observacao de teste", got)
+	}
+	if got := mustCell(t, file, 2, 31); got != "3421" {
 		t.Fatalf("row 2 supply ID = %q, want 3421", got)
 	}
-	if got := mustCell(t, file, 3, 8); got != "9876" {
+	if got := mustCell(t, file, 3, 31); got != "9876" {
 		t.Fatalf("row 3 supply ID = %q, want 9876", got)
 	}
-	if got := mustCell(t, file, 3, 13); got != "20.5" {
+	if got := mustCell(t, file, 3, 22); got != "D002" {
+		t.Fatalf("row 3 destination appropriation = %q, want D002", got)
+	}
+	if got := mustCell(t, file, 3, 16); got != "20.5" {
 		t.Fatalf("row 3 quantity = %q, want 20.5", got)
 	}
 }
@@ -102,21 +108,7 @@ func TestAppendTransferToExcelCreatesFileWhenMissing(t *testing.T) {
 }
 
 func TestExcelHeadersMatchExpectedColumns(t *testing.T) {
-	want := []string{
-		"ID Movimento Sienge",
-		"Data e Hora",
-		"Usuario",
-		"Cargo",
-		"Solicitante",
-		"Obra Origem",
-		"Obra Destino",
-		"ID Insumo",
-		"Nome Insumo",
-		"Detalhe",
-		"Marca",
-		"Apropriacao",
-		"Quantidade",
-	}
+	want := ExcelHeaders
 
 	if len(ExcelHeaders) != len(want) {
 		t.Fatalf("len(ExcelHeaders) = %d, want %d", len(ExcelHeaders), len(want))

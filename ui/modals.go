@@ -20,34 +20,83 @@ func ShowInsumoDetailsModal(window fyne.Window, item models.Insumo) {
 	if window == nil {
 		return
 	}
+	reconciliation := models.ReconcileStockAndAppropriations(item.Quantidade, item.Apropriacoes)
 	rows := []fyne.CanvasObject{
-		widget.NewLabel(fmt.Sprintf("%s %s - %s", item.Nome, item.Detalhe, item.Marca)),
+		selectableWrappedLabel(fmt.Sprintf("Insumo: %d - %s", item.ID, item.Nome)),
+		selectableWrappedLabel(fmt.Sprintf("Detalhe: %s | DetailID: %d", emptyAsDash(item.Detalhe), item.DetalheID)),
+		selectableWrappedLabel(fmt.Sprintf("Marca: %s | TrademarkID: %d", emptyAsDash(item.Marca), item.MarcaID)),
+		selectableWrappedLabel(fmt.Sprintf("Unidade: %s", emptyAsDash(item.Unidade))),
+		selectableWrappedLabel(fmt.Sprintf("Estoque do item: %s", models.FormatQuantidade(item.Quantidade, item.Unidade))),
 		widget.NewSeparator(),
-		widget.NewLabel("Codigo | Descricao | Quantidade disponivel"),
+		selectableWrappedLabel("Codigo | Descricao | Unidade construtiva | Item orcamento | Quantidade"),
+	}
+	if !reconciliation.OK {
+		rows = append(rows, selectableWrappedLabel("Atencao: a soma das apropriacoes retornadas nao bate com o estoque do item. Isso pode indicar filtro incorreto, reserva, paginacao incompleta ou divergencia na API."))
+		rows = append(rows, selectableWrappedLabel(fmt.Sprintf("Soma das apropriacoes: %s | Diferenca: %.4f", models.FormatQuantidade(reconciliation.AppropriationsQuantity, item.Unidade), reconciliation.Difference)))
+		rows = append(rows, widget.NewSeparator())
 	}
 	for _, appropriation := range item.Apropriacoes {
-		rows = append(rows, widget.NewLabel(fmt.Sprintf("%s | %s | %s", appropriation.Codigo, appropriation.Descricao, models.FormatQuantidade(appropriation.Quantidade, item.Unidade))))
+		rows = append(rows, selectableWrappedLabel(fmt.Sprintf("%s | %s | %d | %d | %s", appropriation.Codigo, appropriationDisplayName(appropriation), appropriation.BuildingUnitID, appropriation.SheetItemID, models.FormatQuantidade(appropriation.Quantidade, item.Unidade))))
 	}
-	dialog.ShowCustom("Detalhes do Insumo", "Fechar", container.NewVScroll(container.NewVBox(rows...)), window)
+	content := container.NewVScroll(container.NewVBox(rows...))
+	d := dialog.NewCustom("Detalhes do insumo", "Fechar", content, window)
+	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), insumoSelectionDialogWidthRatio, insumoSelectionDialogHeightRatio))
+	d.Show()
+}
+
+func emptyAsDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return strings.TrimSpace(value)
 }
 
 func ShowInsumoSelectionModal(window fyne.Window, options []models.Insumo, onSelect func(models.Insumo)) {
 	if window == nil || len(options) == 0 {
 		return
 	}
-	rows := make([]fyne.CanvasObject, 0, len(options))
-	for _, option := range options {
-		selected := option
-		rows = append(rows, container.NewHBox(
-			widget.NewLabel(TransferItemLabel(option)),
-			widget.NewButton("Selecionar", func() {
-				if onSelect != nil {
-					onSelect(selected)
-				}
-			}),
-		))
-	}
-	dialog.ShowCustom("Selecione o insumo", "Fechar", container.NewVScroll(container.NewVBox(rows...)), window)
+	var d dialog.Dialog
+	selecting := false
+	selectedIndex := -1
+	var selectButton *widget.Button
+	selectButton = widget.NewButton("Selecionar", func() {
+		if selecting {
+			return
+		}
+		selected, err := ResolveSelectedInsumo(options, selectedIndex)
+		if err != nil {
+			return
+		}
+		selecting = true
+		selectButton.Disable()
+		if d != nil {
+			d.Hide()
+		}
+		if onSelect != nil {
+			onSelect(selected)
+		}
+	})
+	selectButton.Disable()
+	tableRows := BuildTransferInsumoSelectionRows(options)
+	table := newInsumoSelectionTable(&tableRows, func(index int) {
+		selectedIndex = index
+		selectButton.Enable()
+	})
+	scroll := container.NewScroll(table)
+	scroll.SetMinSize(fyne.NewSize(860, 360))
+	content := container.NewBorder(
+		container.NewVBox(
+			selectableWrappedLabel("Foram encontrados multiplos insumos para este ID."),
+			selectableWrappedLabel("Clique na linha correta e confirme."),
+		),
+		container.NewHBox(selectButton),
+		nil,
+		nil,
+		scroll,
+	)
+	d = dialog.NewCustom("Selecione o insumo", "Fechar", content, window)
+	d.Resize(sizeAtLeastWindowRatio(fyne.NewSize(900, 500), window.Canvas().Size(), insumoSelectionDialogWidthRatio, insumoSelectionDialogHeightRatio))
+	d.Show()
 }
 
 func ShowConfirmTransferModal(window fyne.Window, transfer models.Transferencia, onConfirm func()) {
@@ -57,11 +106,21 @@ func ShowConfirmTransferModal(window fyne.Window, transfer models.Transferencia,
 		}
 		return
 	}
-	dialog.ShowConfirm("Confirmar Transferencia", TransferSummaryText(transfer), func(confirm bool) {
+	summary := BuildTransferConfirmationText(transfer)
+	content := container.NewBorder(
+		nil,
+		widget.NewButton("Copiar resumo", func() { copyTextToClipboard(summary) }),
+		nil,
+		nil,
+		container.NewVScroll(selectableWrappedLabel(summary)),
+	)
+	d := dialog.NewCustomConfirm("Confirmar Transferencia", "Enviar", "Cancelar", content, func(confirm bool) {
 		if confirm && onConfirm != nil {
 			onConfirm()
 		}
 	}, window)
+	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), 0.55, 0.55))
+	d.Show()
 }
 
 func ShowConfirmRemoveObra(window fyne.Window, onConfirm func()) {
@@ -79,15 +138,67 @@ func ShowConfirmRemoveObra(window fyne.Window, onConfirm func()) {
 }
 
 func TransferSummaryText(transfer models.Transferencia) string {
+	return BuildTransferConfirmationText(transfer)
+}
+
+func BuildTransferConfirmationText(transfer models.Transferencia) string {
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("Origem: %d - %s\n", transfer.ObraOrigemID, transfer.ObraOrigemNome))
 	builder.WriteString(fmt.Sprintf("Destino: %d - %s\n", transfer.ObraDestinoID, transfer.ObraDestinoNome))
 	builder.WriteString(fmt.Sprintf("Solicitante: %s\n", transfer.Solicitante))
+	if strings.TrimSpace(transfer.Observacao) != "" {
+		builder.WriteString(fmt.Sprintf("Observacao: %s\n", transfer.Observacao))
+	}
 	builder.WriteString("\nInsumos:\n")
 	for _, item := range transfer.Insumos {
-		builder.WriteString(fmt.Sprintf("- %d %s %s %s | %s | %s\n", item.ID, item.Nome, item.Detalhe, item.Marca, item.Apropriacao, models.FormatQuantidade(item.Quantidade, "")))
+		builder.WriteString(fmt.Sprintf("- %d %s %s %s\n", item.ID, item.Nome, item.Detalhe, item.Marca))
+		builder.WriteString(fmt.Sprintf("  Origem antes: %s | Quantidade enviada: %s | Origem depois: %s\n", models.FormatQuantidade(item.QuantidadeEstoqueOrigemAntes, item.Unidade), models.FormatQuantidade(quantityOrFallbackUI(item.QuantidadeEnviada, item.Quantidade), item.Unidade), models.FormatQuantidade(item.QuantidadeEstoqueOrigemDepois, item.Unidade)))
+		builder.WriteString(fmt.Sprintf("  Destino antes: %s | Quantidade recebida: %s | Destino depois: %s\n", models.FormatQuantidade(item.QuantidadeEstoqueDestinoAntes, item.Unidade), models.FormatQuantidade(quantityOrFallbackUI(item.QuantidadeRecebida, item.Quantidade), item.Unidade), models.FormatQuantidade(item.QuantidadeEstoqueDestinoDepois, item.Unidade)))
+		builder.WriteString(fmt.Sprintf("  Apropriacao origem: %s | Saldo antes: %s | Saldo depois: %s\n", appropriationTextOrNA(item.ApropriacaoOrigemLabel, item.Apropriacao, item.ApropriacaoDescricao), formatOptionalQuantity(item.QuantidadeApropriacaoOrigemAntes, item.Unidade), formatOptionalQuantity(item.QuantidadeApropriacaoOrigemDepois, item.Unidade)))
+		builder.WriteString(fmt.Sprintf("  Apropriacao destino: %s | Saldo antes: %s | Saldo depois: %s\n", appropriationTextOrNA(item.ApropriacaoDestinoLabel, item.ApropriacaoDestino, item.ApropriacaoDestinoDescricao), formatOptionalQuantity(item.QuantidadeApropriacaoDestinoAntes, item.Unidade), formatOptionalQuantity(item.QuantidadeApropriacaoDestinoDepois, item.Unidade)))
 	}
 	return builder.String()
+}
+
+func quantityOrFallbackUI(value float64, fallback float64) float64 {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
+func appropriationTextOrNA(label string, code string, description string) string {
+	if strings.TrimSpace(label) != "" {
+		return strings.TrimSpace(label)
+	}
+	if strings.TrimSpace(code) == "" {
+		return "Nao se aplica"
+	}
+	return itemAppropriationText(code, description)
+}
+
+func formatOptionalQuantity(value *float64, unit string) string {
+	if value == nil {
+		return "Nao se aplica"
+	}
+	return models.FormatQuantidade(*value, unit)
+}
+
+func itemAppropriationText(code, description string) string {
+	if strings.TrimSpace(description) == "" {
+		return strings.TrimSpace(code)
+	}
+	return strings.TrimSpace(code) + " - " + strings.TrimSpace(description)
+}
+
+func appropriationDisplayName(appropriation models.Apropriacao) string {
+	if strings.TrimSpace(appropriation.Descricao) != "" {
+		return strings.TrimSpace(appropriation.Descricao)
+	}
+	if strings.TrimSpace(appropriation.Referencia) != "" {
+		return strings.TrimSpace(appropriation.Referencia)
+	}
+	return strings.TrimSpace(appropriation.Codigo)
 }
 
 func MaybeShowCredentialReonboarding(state *AppState, err error, status func(string)) bool {
@@ -116,10 +227,10 @@ func ShowCredentialsReonboardingModal(state *AppState, status func(string)) {
 
 	content := container.NewVBox(
 		message,
-		widget.NewLabel("Nome da empresa"), empresa,
-		widget.NewLabel("Subdominio"), subdominio,
-		widget.NewLabel("Usuario API"), usuario,
-		widget.NewLabel("Senha API"), senha,
+		widget.NewLabel("Nome da empresa"), expandingInput(empresa),
+		widget.NewLabel("Subdominio"), expandingInput(subdominio),
+		widget.NewLabel("Usuario API"), expandingInput(usuario),
+		widget.NewLabel("Senha API"), expandingInput(senha),
 	)
 
 	d := dialog.NewCustomConfirm("Refazer Credenciais", "Salvar", "Cancelar", content, func(confirm bool) {
