@@ -34,6 +34,25 @@ func TestTransferKind_LoanCreatesLoanAfterSuccess(t *testing.T) {
 	if movementID != "MOV-LOAN" || len(loanStore.loans) != 1 || loanStore.loans[0].Status != models.LoanStatusPending {
 		t.Fatalf("movement/loans = %q/%#v, want pending loan", movementID, loanStore.loans)
 	}
+	if !strings.HasPrefix(loanStore.loans[0].ID, "EM-") || !strings.HasSuffix(loanStore.loans[0].ID, "-1") {
+		t.Fatalf("loan ID = %q, want EM timestamp sequence", loanStore.loans[0].ID)
+	}
+}
+
+func TestTransferKind_LoanIncrementsGlobalLoanSequence(t *testing.T) {
+	state := validTransferStateWithItem()
+	state.Transferencia.TransferKind = models.TransferKindLoan
+	state.Transfer = &fakeTransferService{movementID: "MOV-LOAN"}
+	state.TransferStore = &fakeTransferStorage{}
+	loanStore := &fakeLoanStore{loans: []models.LoanRecord{{ID: "EM-100-1"}, {ID: "EM-200-3"}, {ID: "loan-100-sem-movimento"}}}
+	state.LoanStore = loanStore
+
+	if _, err := SendTransferencia(nil, state); err != nil {
+		t.Fatalf("SendTransferencia() error = %v", err)
+	}
+	if len(loanStore.loans) != 4 || !strings.HasSuffix(loanStore.loans[3].ID, "-4") {
+		t.Fatalf("loans = %#v, want new loan with sequence 4", loanStore.loans)
+	}
 }
 
 func TestTransferKind_NotApplicableDoesNotCreateLoan(t *testing.T) {

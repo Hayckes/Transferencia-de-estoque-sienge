@@ -480,6 +480,20 @@ func TestBuildTransferenciaTabDoesNotRefreshWhileInitializingAppropriationSelect
 	}
 }
 
+func TestBuildTransferenciaTabDoesNotLoadReturnLoans(t *testing.T) {
+	state := validTransferState()
+	state.Transferencia.TransferKind = models.TransferKindReturn
+	store := &countingLoanStore{fakeLoanStore: fakeLoanStore{loans: uiTestLoans()}}
+	state.LoanStore = store
+
+	if BuildTransferenciaTab(state) == nil {
+		t.Fatal("BuildTransferenciaTab() returned nil")
+	}
+	if store.listCalls != 0 {
+		t.Fatalf("ListLoans calls = %d, want 0", store.listCalls)
+	}
+}
+
 func validTransferState() *AppState {
 	state := NewAppState(testConfig())
 	state.Transferencia.ObraOrigem = "121 - Residencial Novo Horizonte"

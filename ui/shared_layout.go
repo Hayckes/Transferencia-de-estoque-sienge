@@ -27,11 +27,44 @@ func withMinObjectWidth(input fyne.CanvasObject, minWidth float32) fyne.CanvasOb
 }
 
 func scrollablePage(objects ...fyne.CanvasObject) fyne.CanvasObject {
-	return flexibleScroll(container.NewPadded(container.NewVBox(objects...)))
+	content := container.NewPadded(container.NewVBox(objects...))
+	scroll := container.NewScroll(content)
+	attachVerticalScroll(content, scroll)
+	return scroll
 }
 
 func flexibleScroll(content fyne.CanvasObject) fyne.CanvasObject {
-	return container.NewScroll(content)
+	scroll := container.NewScroll(content)
+	attachVerticalScroll(content, scroll)
+	return scroll
+}
+
+type horizontalBarScroll struct {
+	*container.Scroll
+	verticalParent *container.Scroll
+}
+
+func horizontalScrollbarOnly(content fyne.CanvasObject) fyne.CanvasObject {
+	return &horizontalBarScroll{Scroll: container.NewHScroll(content)}
+}
+
+func (s *horizontalBarScroll) Scrolled(ev *fyne.ScrollEvent) {
+	if s.verticalParent != nil && ev.Scrolled.DY != 0 {
+		s.verticalParent.Scrolled(ev)
+	}
+}
+
+func attachVerticalScroll(object fyne.CanvasObject, scroll *container.Scroll) {
+	switch typed := object.(type) {
+	case *horizontalBarScroll:
+		typed.verticalParent = scroll
+	case *fyne.Container:
+		for _, child := range typed.Objects {
+			attachVerticalScroll(child, scroll)
+		}
+	case *container.Scroll:
+		attachVerticalScroll(typed.Content, scroll)
+	}
 }
 
 func responsiveRow(objects ...fyne.CanvasObject) fyne.CanvasObject {

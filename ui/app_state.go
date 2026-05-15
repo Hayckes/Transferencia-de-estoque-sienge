@@ -38,7 +38,12 @@ type AppState struct {
 	Runner           AsyncRunner
 	Window           fyne.Window
 	RefreshUI        func()
+	RefreshTabUI     func(string)
+	mainShell        *mainShell
 	transferSubmitMu sync.Mutex
+	refreshMu        sync.Mutex
+	refreshPending   bool
+	refreshTarget    string
 }
 
 type StockService interface {
@@ -104,14 +109,53 @@ func NewAppState(cfg models.Config) *AppState {
 }
 
 func (state *AppState) Refresh() {
-	if state != nil && state.RefreshUI != nil {
-		state.RefreshUI()
+	if state == nil {
+		return
 	}
+	state.enqueueRefresh("")
 }
 
 func (state *AppState) RefreshTab(tab string) {
-	if state != nil {
-		state.ActiveTab = tab
-		state.Refresh()
+	if state == nil {
+		return
 	}
+	state.ActiveTab = tab
+	state.enqueueRefresh(tab)
+}
+
+func (state *AppState) enqueueRefresh(tab string) {
+	if state.RefreshUI == nil && state.RefreshTabUI == nil {
+		return
+	}
+	dispatch := state.Runner.Dispatch
+	if dispatch == nil {
+		dispatch = func(fn func()) { fn() }
+	}
+
+	state.refreshMu.Lock()
+	if state.refreshPending {
+		if tab == "" || state.refreshTarget != "" {
+			state.refreshTarget = tab
+		}
+		state.refreshMu.Unlock()
+		return
+	}
+	state.refreshTarget = tab
+	state.refreshPending = true
+	state.refreshMu.Unlock()
+
+	dispatch(func() {
+		state.refreshMu.Lock()
+		target := state.refreshTarget
+		state.refreshTarget = ""
+		state.refreshPending = false
+		state.refreshMu.Unlock()
+		if target != "" && state.RefreshTabUI != nil {
+			state.RefreshTabUI(target)
+		} else if state.RefreshUI != nil {
+			state.RefreshUI()
+		} else if state.RefreshTabUI != nil {
+			state.RefreshTabUI(state.ActiveTab)
+		}
+	})
 }

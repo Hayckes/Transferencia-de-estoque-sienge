@@ -3,11 +3,14 @@ package models
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const quantityEpsilon = 0.0001
+
+const loanIDPrefix = "EM"
 
 type TransferKind string
 
@@ -159,9 +162,23 @@ func (l LoanRecord) PendingItems() []LoanItem {
 	return items
 }
 
-func CreateLoanRecordFromTransfer(transfer Transferencia) LoanRecord {
+func MarkLoanReturnedManually(loan LoanRecord, returnedAt time.Time) LoanRecord {
+	loan.Items = append([]LoanItem(nil), loan.Items...)
+	loan.ReturnTransferIDs = append([]string(nil), loan.ReturnTransferIDs...)
+	loan.ReturnMovementIDs = append([]string(nil), loan.ReturnMovementIDs...)
+	for index := range loan.Items {
+		if loan.Items[index].PendingQuantity() > quantityEpsilon {
+			loan.Items[index].ReturnedQuantity = loan.Items[index].LoanedQuantity
+		}
+	}
+	loan.LastReturnDate = &returnedAt
+	loan.Recalculate()
+	return loan
+}
+
+func CreateLoanRecordFromTransfer(transfer Transferencia, sequence int) LoanRecord {
 	record := LoanRecord{
-		ID:                  BuildLoanID(transfer),
+		ID:                  BuildLoanID(transfer, sequence),
 		OriginalMovementID:  transfer.IDMovimento,
 		CreatedAt:           time.Now(),
 		LoanDate:            transfer.DataHora,
@@ -184,12 +201,22 @@ func CreateLoanRecordFromTransfer(transfer Transferencia) LoanRecord {
 	return record
 }
 
-func BuildLoanID(transfer Transferencia) string {
-	movementID := strings.TrimSpace(transfer.IDMovimento)
-	if movementID == "" {
-		movementID = "sem-movimento"
+func BuildLoanID(transfer Transferencia, sequence int) string {
+	if sequence <= 0 {
+		sequence = 1
 	}
-	return fmt.Sprintf("loan-%d-%s", transfer.DataHora.UnixNano(), sanitizeLoanIDPart(movementID))
+	return fmt.Sprintf("%s-%d-%d", loanIDPrefix, transfer.DataHora.UnixNano(), sequence)
+}
+
+func NextLoanSequence(loans []LoanRecord) int {
+	maxSequence := 0
+	for _, loan := range loans {
+		sequence, ok := loanIDSequence(loan.ID)
+		if ok && sequence > maxSequence {
+			maxSequence = sequence
+		}
+	}
+	return maxSequence + 1
 }
 
 func LoanItemFromTransferItem(item ItemTransferido) LoanItem {
@@ -311,20 +338,19 @@ func appendIfMissing(values []string, value string) []string {
 	return append(values, value)
 }
 
-func sanitizeLoanIDPart(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return "sem-id"
+func loanIDSequence(id string) (int, bool) {
+	parts := strings.Split(strings.TrimSpace(id), "-")
+	if len(parts) != 3 || parts[0] != loanIDPrefix {
+		return 0, false
 	}
-	var builder strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			builder.WriteRune(r)
-			continue
-		}
-		builder.WriteRune('-')
+	if _, err := strconv.ParseInt(parts[1], 10, 64); err != nil {
+		return 0, false
 	}
-	return strings.Trim(builder.String(), "-")
+	sequence, err := strconv.Atoi(parts[2])
+	if err != nil || sequence <= 0 {
+		return 0, false
+	}
+	return sequence, true
 }
 
 var ErrLoanNotFound = errors.New("emprestimo nao encontrado")

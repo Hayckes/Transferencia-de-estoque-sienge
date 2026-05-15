@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"sort"
@@ -28,6 +29,7 @@ type EmprestimosTabState struct {
 
 type LoanTableRow struct {
 	ID               string
+	OriginWork       string
 	DestinationWork  string
 	Solicitor        string
 	Type             string
@@ -54,9 +56,6 @@ func NewEmprestimosTabState() EmprestimosTabState {
 
 func BuildEmprestimosTab(state *AppState) fyne.CanvasObject {
 	status := NewStatusView(state.Window, state.Emprestimos.Status)
-	if err := RefreshEmprestimos(state); err != nil {
-		setEmprestimosStatus(state, status, err.Error())
-	}
 	initializing := true
 
 	search := widget.NewEntry()
@@ -107,41 +106,138 @@ func BuildEmprestimosTab(state *AppState) fyne.CanvasObject {
 		ShowPartial:  state.Emprestimos.ShowPartial,
 		ShowReturned: state.Emprestimos.ShowReturned,
 	})
-	objects := []fyne.CanvasObject{loanTableHeader()}
-	for _, row := range rows {
-		loan, ok := LoanByID(state.Emprestimos.Loans, row.ID)
-		if !ok {
-			continue
+	selectedLoanID := ""
+	var detailsButton *widget.Button
+	var returnButton *widget.Button
+	selectedLoan := func() (models.LoanRecord, bool) {
+		if strings.TrimSpace(selectedLoanID) == "" {
+			return models.LoanRecord{}, false
 		}
-		detailsButton := widget.NewButton("Detalhes", func() { ShowLoanDetailsModal(state.Window, loan) })
-		returnButton := widget.NewButton("Devolver", func() { StartLoanReturn(state, loan) })
-		if !row.CanReturn {
+		return LoanByID(state.Emprestimos.Loans, selectedLoanID)
+	}
+	refreshActions := func() {
+		loan, ok := selectedLoan()
+		if !ok {
+			detailsButton.Disable()
+			returnButton.Disable()
+			return
+		}
+		loan.Recalculate()
+		detailsButton.Enable()
+		if models.CanReturnLoan(loan.Status) {
+			returnButton.Enable()
+		} else {
 			returnButton.Disable()
 		}
-		objects = append(objects, container.NewHBox(
-			withMinObjectWidth(widget.NewLabel(row.DestinationWork), 220),
-			withMinObjectWidth(widget.NewLabel(row.Solicitor), 150),
-			withMinObjectWidth(widget.NewLabel(row.Type), 90),
-			withMinObjectWidth(widget.NewLabel(row.LoanDate), 110),
-			withMinObjectWidth(widget.NewLabel(row.ReturnDate), 110),
-			withMinObjectWidth(widget.NewLabel(row.LoanedQuantity), 110),
-			withMinObjectWidth(widget.NewLabel(row.ReturnedQuantity), 110),
-			withMinObjectWidth(statusText(row.Status, row.StatusColor), 170),
-			withMinObjectWidth(widget.NewLabel(row.ItemCount), 70),
-			container.NewHBox(detailsButton, returnButton),
-		))
 	}
+	detailsButton = widget.NewButton("Detalhes", func() {
+		loan, ok := selectedLoan()
+		if !ok {
+			setEmprestimosStatus(state, status, "Selecione um emprestimo na tabela.")
+			return
+		}
+		ShowLoanDetailsModal(state, loan)
+	})
+	detailsButton.Disable()
+	returnButton = widget.NewButton("Devolver", func() {
+		loan, ok := selectedLoan()
+		if !ok {
+			setEmprestimosStatus(state, status, "Selecione um emprestimo na tabela.")
+			return
+		}
+		StartLoanReturn(state, loan)
+	})
+	returnButton.Disable()
+	loanTable := newLoanTable(&rows, func(index int) {
+		if index < 0 || index >= len(rows) {
+			selectedLoanID = ""
+		} else {
+			selectedLoanID = rows[index].ID
+		}
+		refreshActions()
+	})
+	resultsBox := container.NewBorder(nil, container.NewHBox(detailsButton, returnButton), nil, nil, loanTable)
 	if len(rows) == 0 {
-		objects = append(objects, widget.NewLabel("Nenhum emprestimo encontrado para os filtros informados."))
+		resultsBox = container.NewBorder(widget.NewLabel("Nenhum emprestimo encontrado para os filtros informados."), container.NewHBox(detailsButton, returnButton), nil, nil, loanTable)
 	}
-
-	return scrollablePage(
+	topContent := container.NewPadded(container.NewVBox(
 		widget.NewLabel("Emprestimos"),
 		responsiveRow(expandingInput(search), refresh),
 		container.NewHBox(pending, partial, returned),
 		status.Object(),
-		container.NewHScroll(container.NewVBox(objects...)),
+	))
+
+	return flexibleScroll(container.NewBorder(topContent, nil, nil, nil, resultsBox))
+}
+
+func LoanTableColumns() []string {
+	return []string{"ID Emprestimo", "Obra origem", "Obra destino", "Solicitante", "Tipo", "Data emprestimo", "Data devolucao", "Qtd emprestada", "Qtd devolvida", "Status", "Qtd itens", "Acoes"}
+}
+
+func LoanTableCellValue(row LoanTableRow, col int) string {
+	switch col {
+	case 0:
+		return row.ID
+	case 1:
+		return row.OriginWork
+	case 2:
+		return row.DestinationWork
+	case 3:
+		return row.Solicitor
+	case 4:
+		return row.Type
+	case 5:
+		return row.LoanDate
+	case 6:
+		return row.ReturnDate
+	case 7:
+		return row.LoanedQuantity
+	case 8:
+		return row.ReturnedQuantity
+	case 9:
+		return row.Status
+	case 10:
+		return row.ItemCount
+	case 11:
+		if row.CanReturn {
+			return "Detalhes / Devolver"
+		}
+		return "Detalhes"
+	default:
+		return ""
+	}
+}
+
+func newLoanTable(rows *[]LoanTableRow, onSelected func(int)) *widget.Table {
+	columns := LoanTableColumns()
+	table := widget.NewTable(
+		func() (int, int) { return len(*rows) + 1, len(columns) },
+		func() fyne.CanvasObject {
+			label := widget.NewLabel("")
+			label.Wrapping = fyne.TextTruncate
+			return label
+		},
+		func(id widget.TableCellID, obj fyne.CanvasObject) {
+			label := obj.(*widget.Label)
+			label.TextStyle = fyne.TextStyle{}
+			if id.Row == 0 {
+				label.TextStyle = fyne.TextStyle{Bold: true}
+				label.SetText(columns[id.Col])
+				return
+			}
+			label.SetText(LoanTableCellValue((*rows)[id.Row-1], id.Col))
+		},
 	)
+	table.OnSelected = func(id widget.TableCellID) {
+		if id.Row == 0 || onSelected == nil {
+			return
+		}
+		onSelected(id.Row - 1)
+	}
+	for col, width := range []float32{190, 220, 220, 150, 100, 125, 125, 130, 130, 170, 80, 150} {
+		table.SetColumnWidth(col, width)
+	}
+	return table
 }
 
 type LoanTableFilter struct {
@@ -176,6 +272,7 @@ func LoanTableRowFromRecord(loan models.LoanRecord) LoanTableRow {
 	}
 	return LoanTableRow{
 		ID:               loan.ID,
+		OriginWork:       models.Obra{ID: loan.OriginWorkID, Nome: loan.OriginWorkName}.Label(),
 		DestinationWork:  models.Obra{ID: loan.DestinationWorkID, Nome: loan.DestinationWorkName}.Label(),
 		Solicitor:        loan.Solicitor,
 		Type:             models.TransferKindLabel(models.TransferKindLoan),
@@ -269,7 +366,7 @@ func TransferItemStateFromLoanItem(item models.LoanItem) TransferenciaItemState 
 	}
 }
 
-func ShowLoanDetailsModal(window fyne.Window, loan models.LoanRecord) {
+func ShowLoanDetailsModal(state *AppState, loan models.LoanRecord) {
 	loan.Recalculate()
 	rows := []fyne.CanvasObject{
 		selectableWrappedLabel("ID do emprestimo: " + loan.ID),
@@ -298,12 +395,55 @@ func ShowLoanDetailsModal(window fyne.Window, loan models.LoanRecord) {
 			rows = append(rows, selectableWrappedLabel("Movimento: "+movementID))
 		}
 	}
+	if state == nil || state.Window == nil {
+		return
+	}
+	window := state.Window
+	manualReturnButton := widget.NewButton("Devolvido", nil)
+	manualReturnButton.Importance = widget.HighImportance
+	var d dialog.Dialog
+	manualReturnButton.OnTapped = func() {
+		dialog.ShowConfirm("Marcar como devolvido", "Isso apenas atualiza o controle local. Nenhuma transferencia sera criada no Sienge.", func(confirm bool) {
+			if !confirm {
+				return
+			}
+			if err := MarkLoanAsReturnedManually(state, loan.ID, time.Now()); err != nil {
+				setEmprestimosStatus(state, nil, "Nao foi possivel marcar o emprestimo como devolvido: "+err.Error())
+				dialog.ShowError(err, window)
+				return
+			}
+			setEmprestimosStatus(state, nil, "Emprestimo marcado como devolvido.")
+			if d != nil {
+				d.Hide()
+			}
+			state.RefreshTab(TabEmprestimos)
+		}, window)
+	}
+	if !models.CanReturnLoan(loan.Status) {
+		manualReturnButton.Disable()
+	}
 	if window == nil {
 		return
 	}
-	d := dialog.NewCustom("Detalhes do emprestimo", "Fechar", container.NewVScroll(container.NewVBox(rows...)), window)
+	content := container.NewBorder(nil, container.NewHBox(manualReturnButton), nil, nil, container.NewVScroll(container.NewVBox(rows...)))
+	d = dialog.NewCustom("Detalhes do emprestimo", "Fechar", content, window)
 	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), 0.55, 0.6))
 	d.Show()
+}
+
+func MarkLoanAsReturnedManually(state *AppState, loanID string, returnedAt time.Time) error {
+	if state == nil || state.LoanStore == nil {
+		return errors.New("armazenamento de emprestimos nao configurado")
+	}
+	loan, err := state.LoanStore.GetLoanByID(loanID)
+	if err != nil {
+		return err
+	}
+	updated := models.MarkLoanReturnedManually(loan, returnedAt)
+	if err := state.LoanStore.UpsertLoan(updated); err != nil {
+		return err
+	}
+	return RefreshEmprestimos(state)
 }
 
 func ShowLoanReturnSelectionModal(state *AppState, loan models.LoanRecord, items []models.LoanItem) {
@@ -311,11 +451,17 @@ func ShowLoanReturnSelectionModal(state *AppState, loan models.LoanRecord, items
 	checks := make([]*widget.Check, len(selection.Items))
 	var selectAll *widget.Check
 	var confirm *widget.Button
+	updatingChecks := false
 	selectAll = widget.NewCheck("Selecionar todos", func(checked bool) {
+		if updatingChecks {
+			return
+		}
 		selection = ToggleLoanReturnSelectAll(selection, checked)
+		updatingChecks = true
 		for index, check := range checks {
 			check.SetChecked(selection.SelectedIndexes[index])
 		}
+		updatingChecks = false
 		if confirm != nil {
 			confirm.Enable()
 		}
@@ -324,8 +470,13 @@ func ShowLoanReturnSelectionModal(state *AppState, loan models.LoanRecord, items
 	for index, item := range selection.Items {
 		itemIndex := index
 		checks[index] = widget.NewCheck(LoanReturnItemLabel(item), func(checked bool) {
+			if updatingChecks {
+				return
+			}
 			selection = ToggleLoanReturnItem(selection, itemIndex, checked)
+			updatingChecks = true
 			selectAll.SetChecked(selection.SelectAll)
+			updatingChecks = false
 			if confirm != nil {
 				if len(SelectedLoanReturnItems(selection)) == 0 {
 					confirm.Disable()
@@ -408,7 +559,7 @@ func LoanReturnOptionLabels(loans []models.LoanRecord) []string {
 }
 
 func LoanReturnOptionLabel(loan models.LoanRecord) string {
-	return fmt.Sprintf("%s | %s | %s", models.Obra{ID: loan.DestinationWorkID, Nome: loan.DestinationWorkName}.Label(), loan.Solicitor, loan.LoanDate.Format("02/01/2006"))
+	return fmt.Sprintf("%s | %s | %s | %s", loan.ID, models.Obra{ID: loan.DestinationWorkID, Nome: loan.DestinationWorkName}.Label(), loan.Solicitor, loan.LoanDate.Format("02/01/2006"))
 }
 
 func LoanByReturnOptionLabel(loans []models.LoanRecord, label string) (models.LoanRecord, bool) {
@@ -452,13 +603,13 @@ func LoanReturnItemLabel(item models.LoanItem) string {
 	return fmt.Sprintf("%d - %s / %s / %s - Pendente: %s %s", item.ResourceID, item.ResourceName, item.DetailName, item.BrandName, FormatBrazilianDecimal(item.PendingQuantity()), item.Unit)
 }
 
-func loadReturnLoans(state *AppState) {
+func RefreshReturnLoansForTransfer(state *AppState) error {
 	if state == nil || state.LoanStore == nil {
-		return
+		return nil
 	}
 	loans, err := state.LoanStore.ListLoans()
 	if err != nil {
-		return
+		return err
 	}
 	available := make([]models.LoanRecord, 0, len(loans))
 	for _, loan := range loans {
@@ -468,6 +619,7 @@ func loadReturnLoans(state *AppState) {
 		}
 	}
 	state.Transferencia.AvailableLoansForReturn = available
+	return nil
 }
 
 func effectiveTransferKindState(state *AppState) models.TransferKind {
@@ -499,9 +651,17 @@ func PrepareLoanSideEffectsAfterSend(state *AppState, transfer *models.Transfere
 	}
 	switch models.EffectiveTransferKind(transfer.TransferKind) {
 	case models.TransferKindLoan:
-		loan := models.CreateLoanRecordFromTransfer(*transfer)
+		loans, err := state.LoanStore.ListLoans()
+		sequence := 1
+		if err == nil {
+			sequence = models.NextLoanSequence(loans)
+		}
+		loan := models.CreateLoanRecordFromTransfer(*transfer, sequence)
 		transfer.LinkedLoanID = loan.ID
 		transfer.LoanStatus = loan.Status
+		if err != nil {
+			return func() error { return err }
+		}
 		return func() error { return state.LoanStore.UpsertLoan(loan) }
 	case models.TransferKindReturn:
 		if strings.TrimSpace(transfer.LinkedLoanID) == "" {
@@ -594,6 +754,6 @@ func loanRowMatchesSearch(row LoanTableRow, search string) bool {
 	if search == "" {
 		return true
 	}
-	visible := strings.ToLower(strings.Join([]string{row.DestinationWork, row.Solicitor, row.Type, row.LoanDate, row.ReturnDate, row.LoanedQuantity, row.ReturnedQuantity, row.Status, row.ItemCount}, " "))
+	visible := strings.ToLower(strings.Join([]string{row.ID, row.OriginWork, row.DestinationWork, row.Solicitor, row.Type, row.LoanDate, row.ReturnDate, row.LoanedQuantity, row.ReturnedQuantity, row.Status, row.ItemCount}, " "))
 	return strings.Contains(visible, search)
 }

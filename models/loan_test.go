@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -48,18 +49,76 @@ func TestLoanRecord_StatusReturned(t *testing.T) {
 	}
 }
 
+func TestMarkLoanReturnedManuallyMarksAllPendingItems(t *testing.T) {
+	loan := testLoanRecord()
+	returnedAt := time.Date(2024, 7, 20, 10, 0, 0, 0, time.Local)
+
+	updated := MarkLoanReturnedManually(loan, returnedAt)
+
+	if updated.Status != LoanStatusReturned || updated.TotalReturnedQuantity != updated.TotalLoanedQuantity {
+		t.Fatalf("updated loan = %#v, want returned with full returned quantity", updated)
+	}
+	for _, item := range updated.Items {
+		if item.ReturnedQuantity != item.LoanedQuantity {
+			t.Fatalf("item = %#v, want returned quantity equal loaned quantity", item)
+		}
+	}
+	if updated.LastReturnDate == nil || !updated.LastReturnDate.Equal(returnedAt) {
+		t.Fatalf("LastReturnDate = %v, want %v", updated.LastReturnDate, returnedAt)
+	}
+}
+
+func TestMarkLoanReturnedManuallyDoesNotMutateInput(t *testing.T) {
+	loan := testLoanRecord()
+	originalReturnedQuantity := loan.Items[1].ReturnedQuantity
+
+	_ = MarkLoanReturnedManually(loan, time.Now())
+
+	if loan.Items[1].ReturnedQuantity != originalReturnedQuantity || loan.Status != LoanStatusPartiallyReturned {
+		t.Fatalf("input loan mutated: %#v", loan)
+	}
+}
+
 func TestCreateLoanRecordFromTransfer_CreatesPendingLoan(t *testing.T) {
 	transfer := testLoanTransfer()
-	loan := CreateLoanRecordFromTransfer(transfer)
+	loan := CreateLoanRecordFromTransfer(transfer, 1)
 	if loan.Status != LoanStatusPending || loan.Type != TransferKindLoan || loan.OriginalMovementID != "MOV-1" {
 		t.Fatalf("loan = %#v, want pending loan from transfer", loan)
 	}
 }
 
 func TestCreateLoanRecordFromTransfer_CopiesWorkAndSolicitorData(t *testing.T) {
-	loan := CreateLoanRecordFromTransfer(testLoanTransfer())
+	loan := CreateLoanRecordFromTransfer(testLoanTransfer(), 1)
 	if loan.OriginWorkID != 121 || loan.DestinationWorkID != 205 || loan.Solicitor != "Maria" || loan.User != "Joao" {
 		t.Fatalf("loan = %#v, want copied transfer data", loan)
+	}
+}
+
+func TestBuildLoanIDUsesTimestampAndSequence(t *testing.T) {
+	transfer := testLoanTransfer()
+	want := "EM-" + strconv.FormatInt(transfer.DataHora.UnixNano(), 10) + "-2"
+	if got := BuildLoanID(transfer, 2); got != want {
+		t.Fatalf("BuildLoanID() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildLoanIDDefaultsInvalidSequenceToOne(t *testing.T) {
+	transfer := testLoanTransfer()
+	want := "EM-" + strconv.FormatInt(transfer.DataHora.UnixNano(), 10) + "-1"
+	if got := BuildLoanID(transfer, 0); got != want {
+		t.Fatalf("BuildLoanID() = %q, want %q", got, want)
+	}
+}
+
+func TestNextLoanSequenceUsesGlobalEMSuffix(t *testing.T) {
+	loans := []LoanRecord{
+		{ID: "EM-100-1"},
+		{ID: "loan-100-sem-movimento"},
+		{ID: "EM-200-3"},
+		{ID: "EM-invalid-9"},
+	}
+	if got := NextLoanSequence(loans); got != 4 {
+		t.Fatalf("NextLoanSequence() = %d, want 4", got)
 	}
 }
 

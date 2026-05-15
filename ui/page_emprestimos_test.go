@@ -2,7 +2,6 @@ package ui
 
 import (
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +26,47 @@ func TestBuildLoanTableRows_SearchesAnyVisibleField(t *testing.T) {
 	rows := BuildLoanTableRows(uiTestLoans(), LoanTableFilter{Search: "ana", ShowPending: true, ShowPartial: true, ShowReturned: true})
 	if len(rows) != 1 || rows[0].Solicitor != "Ana" {
 		t.Fatalf("rows = %#v, want Ana row", rows)
+	}
+}
+
+func TestBuildLoanTableRows_SearchesLoanID(t *testing.T) {
+	rows := BuildLoanTableRows(uiTestLoans(), LoanTableFilter{Search: "loan-2", ShowPending: true, ShowPartial: true, ShowReturned: true})
+	if len(rows) != 1 || rows[0].ID != "loan-2" {
+		t.Fatalf("rows = %#v, want loan-2 row", rows)
+	}
+}
+
+func TestBuildLoanTableRows_SearchesOriginWork(t *testing.T) {
+	rows := BuildLoanTableRows(uiTestLoans(), LoanTableFilter{Search: "origem", ShowPending: true, ShowPartial: true, ShowReturned: true})
+	if len(rows) != 3 {
+		t.Fatalf("len(rows) = %d, want 3", len(rows))
+	}
+}
+
+func TestLoanTableColumnsStartsWithLoanID(t *testing.T) {
+	columns := LoanTableColumns()
+	if len(columns) == 0 {
+		t.Fatal("LoanTableColumns() returned no columns")
+	}
+	if columns[0] != "ID Emprestimo" {
+		t.Fatalf("LoanTableColumns()[0] = %q, want ID Emprestimo", columns[0])
+	}
+	if columns[1] != "Obra origem" {
+		t.Fatalf("LoanTableColumns()[1] = %q, want Obra origem", columns[1])
+	}
+}
+
+func TestLoanTableCellValueMapsLoanIDFirst(t *testing.T) {
+	row := LoanTableRowFromRecord(uiTestLoans()[0])
+	if got := LoanTableCellValue(row, 0); got != row.ID {
+		t.Fatalf("LoanTableCellValue(col 0) = %q, want %q", got, row.ID)
+	}
+}
+
+func TestLoanTableCellValueMapsOriginWork(t *testing.T) {
+	row := LoanTableRowFromRecord(uiTestLoans()[0])
+	if got := LoanTableCellValue(row, 1); got != "121 - Origem" {
+		t.Fatalf("LoanTableCellValue(col 1) = %q, want 121 - Origem", got)
 	}
 }
 
@@ -89,16 +129,74 @@ func TestPrepareTransferReturnFromLoanPrefillsTransferData(t *testing.T) {
 	}
 }
 
-func TestBuildEmprestimosTabShowsRefreshError(t *testing.T) {
+func TestLoanReturnOptionLabelIncludesLoanID(t *testing.T) {
+	loan := uiTestLoans()[0]
+	label := LoanReturnOptionLabel(loan)
+	want := "loan-1 | 205 - Destino | Maria | 15/07/2024"
+	if label != want {
+		t.Fatalf("LoanReturnOptionLabel() = %q, want %q", label, want)
+	}
+}
+
+func TestLoanByReturnOptionLabelResolvesLabelWithLoanID(t *testing.T) {
+	loans := uiTestLoans()
+	loan, ok := LoanByReturnOptionLabel(loans, LoanReturnOptionLabel(loans[1]))
+	if !ok || loan.ID != "loan-2" {
+		t.Fatalf("LoanByReturnOptionLabel() = %#v/%v, want loan-2/true", loan, ok)
+	}
+}
+
+func TestBuildEmprestimosTabDoesNotLoadLoans(t *testing.T) {
 	state := NewAppState(testConfig())
-	state.LoanStore = &fakeLoanStore{err: errors.New("falha ao carregar emprestimos")}
+	store := &countingLoanStore{fakeLoanStore: fakeLoanStore{err: errors.New("falha ao carregar emprestimos")}}
+	state.LoanStore = store
 
 	if BuildEmprestimosTab(state) == nil {
 		t.Fatal("BuildEmprestimosTab() returned nil")
 	}
-	if !strings.Contains(state.Emprestimos.Status, "falha ao carregar emprestimos") {
-		t.Fatalf("Emprestimos.Status = %q, want refresh error", state.Emprestimos.Status)
+	if store.listCalls != 0 {
+		t.Fatalf("ListLoans calls = %d, want 0", store.listCalls)
 	}
+}
+
+func TestRefreshReturnLoansForTransferReturnsListError(t *testing.T) {
+	state := NewAppState(testConfig())
+	state.LoanStore = &fakeLoanStore{err: errors.New("falha ao carregar emprestimos")}
+
+	if err := RefreshReturnLoansForTransfer(state); err == nil {
+		t.Fatal("RefreshReturnLoansForTransfer() error = nil, want list error")
+	}
+}
+
+func TestMarkLoanAsReturnedManuallyPersistsReturnedLoan(t *testing.T) {
+	state := NewAppState(testConfig())
+	loanStore := &fakeLoanStore{loans: []models.LoanRecord{uiTestLoans()[0]}}
+	state.LoanStore = loanStore
+	returnedAt := time.Date(2024, 7, 20, 10, 0, 0, 0, time.Local)
+
+	if err := MarkLoanAsReturnedManually(state, "loan-1", returnedAt); err != nil {
+		t.Fatalf("MarkLoanAsReturnedManually() error = %v", err)
+	}
+	updated := loanStore.loans[0]
+	if updated.Status != models.LoanStatusReturned || updated.Items[0].ReturnedQuantity != updated.Items[0].LoanedQuantity {
+		t.Fatalf("updated loan = %#v, want returned", updated)
+	}
+	if updated.LastReturnDate == nil || !updated.LastReturnDate.Equal(returnedAt) {
+		t.Fatalf("LastReturnDate = %v, want %v", updated.LastReturnDate, returnedAt)
+	}
+	if len(state.Emprestimos.Loans) != 1 || state.Emprestimos.Loans[0].Status != models.LoanStatusReturned {
+		t.Fatalf("state loans = %#v, want refreshed returned loan", state.Emprestimos.Loans)
+	}
+}
+
+type countingLoanStore struct {
+	fakeLoanStore
+	listCalls int
+}
+
+func (s *countingLoanStore) ListLoans() ([]models.LoanRecord, error) {
+	s.listCalls++
+	return s.fakeLoanStore.ListLoans()
 }
 
 func uiTestLoans() []models.LoanRecord {
