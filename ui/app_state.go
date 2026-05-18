@@ -13,6 +13,7 @@ const (
 	TabObras         = "Obras"
 	TabConsulta      = "Consulta"
 	TabTransferencia = "Transferencia"
+	TabEmprestimos   = "Emprestimos"
 	TabHistorico     = "Historico"
 )
 
@@ -25,17 +26,24 @@ type AppState struct {
 	Transfer         TransferService
 	TransferStore    TransferStorage
 	HistoryStore     HistoryStorage
+	LoanStore        LoanStorage
 	FileOpener       FileOpener
 	Status           string
 	ActiveTab        string
 	Obras            ObrasTabState
 	Consulta         ConsultaTabState
 	Transferencia    TransferenciaTabState
+	Emprestimos      EmprestimosTabState
 	Historico        HistoricoTabState
 	Runner           AsyncRunner
 	Window           fyne.Window
 	RefreshUI        func()
+	RefreshTabUI     func(string)
+	mainShell        *mainShell
 	transferSubmitMu sync.Mutex
+	refreshMu        sync.Mutex
+	refreshPending   bool
+	refreshTarget    string
 }
 
 type StockService interface {
@@ -68,6 +76,14 @@ type HistoryStorage interface {
 	ExcelPath() string
 }
 
+type LoanStorage interface {
+	ListLoans() ([]models.LoanRecord, error)
+	SaveAllLoans([]models.LoanRecord) error
+	UpsertLoan(models.LoanRecord) error
+	GetLoanByID(id string) (models.LoanRecord, error)
+	UpdateLoanAfterReturn(returnTransfer models.Transferencia) error
+}
+
 type FileOpener interface {
 	Open(path string) error
 }
@@ -86,20 +102,60 @@ func NewAppState(cfg models.Config) *AppState {
 		Obras:         NewObrasTabState(cfg),
 		Consulta:      NewConsultaTabState(),
 		Transferencia: NewTransferenciaTabState(),
+		Emprestimos:   NewEmprestimosTabState(),
 		Historico:     NewHistoricoTabState(),
 		Runner:        NewAsyncRunner(func(fn func()) { fn() }),
 	}
 }
 
 func (state *AppState) Refresh() {
-	if state != nil && state.RefreshUI != nil {
-		state.RefreshUI()
+	if state == nil {
+		return
 	}
+	state.enqueueRefresh("")
 }
 
 func (state *AppState) RefreshTab(tab string) {
-	if state != nil {
-		state.ActiveTab = tab
-		state.Refresh()
+	if state == nil {
+		return
 	}
+	state.ActiveTab = tab
+	state.enqueueRefresh(tab)
+}
+
+func (state *AppState) enqueueRefresh(tab string) {
+	if state.RefreshUI == nil && state.RefreshTabUI == nil {
+		return
+	}
+	dispatch := state.Runner.Dispatch
+	if dispatch == nil {
+		dispatch = func(fn func()) { fn() }
+	}
+
+	state.refreshMu.Lock()
+	if state.refreshPending {
+		if tab == "" || state.refreshTarget != "" {
+			state.refreshTarget = tab
+		}
+		state.refreshMu.Unlock()
+		return
+	}
+	state.refreshTarget = tab
+	state.refreshPending = true
+	state.refreshMu.Unlock()
+
+	dispatch(func() {
+		state.refreshMu.Lock()
+		target := state.refreshTarget
+		state.refreshTarget = ""
+		state.refreshPending = false
+		state.refreshMu.Unlock()
+		if target != "" && state.RefreshTabUI != nil {
+			state.RefreshTabUI(target)
+		} else if state.RefreshUI != nil {
+			state.RefreshUI()
+		} else if state.RefreshTabUI != nil {
+			state.RefreshTabUI(state.ActiveTab)
+		}
+	})
 }

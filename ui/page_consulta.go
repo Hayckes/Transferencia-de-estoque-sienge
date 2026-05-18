@@ -179,7 +179,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		resultTableRows = nil
 		resultsTable.Refresh()
 	}
-	worksScroll := container.NewVScroll(worksSelector)
+	worksScroll := container.NewScroll(worksSelector)
 	worksScroll.SetMinSize(fyne.NewSize(0, 130))
 	topContent := container.NewPadded(container.NewVBox(
 		widget.NewLabel("Consultar estoque"),
@@ -191,7 +191,7 @@ func BuildConsultaTab(state *AppState) fyne.CanvasObject {
 		status.Object(),
 	))
 
-	return container.NewBorder(topContent, nil, nil, nil, resultsBox)
+	return flexibleScroll(container.NewBorder(topContent, nil, nil, nil, resultsBox))
 }
 
 func ValidateConsultaInput(state *AppState) (int, []int, error) {

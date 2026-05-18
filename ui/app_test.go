@@ -83,6 +83,18 @@ func TestBuildMainTabsPreservesSelectedTab(t *testing.T) {
 	}
 }
 
+const compactWindowMaxMinWidth float32 = 520
+
+func TestBuildMainTabsAllowsCompactWindowWidth(t *testing.T) {
+	state := NewAppState(testConfig())
+	state.Transferencia.Itens = validTransferStateWithItem().Transferencia.Itens
+
+	minSize := BuildMainTabs(state).MinSize()
+	if minSize.Width > compactWindowMaxMinWidth {
+		t.Fatalf("BuildMainTabs().MinSize().Width = %v, want at most %v", minSize.Width, compactWindowMaxMinWidth)
+	}
+}
+
 func TestWithMinTypingInputWidthEnforcesMinimumWidth(t *testing.T) {
 	entry := widget.NewEntry()
 	wrapped := withMinTypingInputWidth(entry)
@@ -119,6 +131,57 @@ func TestAsyncRunnerRunsOperationAndDispatchesResult(t *testing.T) {
 	}
 	if !dispatched {
 		t.Fatal("dispatch was not called")
+	}
+}
+
+func TestAppStateRefreshCoalescesQueuedRefreshes(t *testing.T) {
+	state := NewAppState(testConfig())
+	queued := make([]func(), 0)
+	state.Runner = NewAsyncRunner(func(fn func()) { queued = append(queued, fn) })
+	rootRefreshes := 0
+	tabRefreshes := make([]string, 0)
+	state.RefreshUI = func() { rootRefreshes++ }
+	state.RefreshTabUI = func(tab string) { tabRefreshes = append(tabRefreshes, tab) }
+
+	state.RefreshTab(TabConsulta)
+	state.RefreshTab(TabEmprestimos)
+
+	if len(queued) != 1 {
+		t.Fatalf("queued refreshes = %d, want 1", len(queued))
+	}
+	if rootRefreshes != 0 || len(tabRefreshes) != 0 {
+		t.Fatalf("refreshes before dispatch = %d/%d, want 0/0", rootRefreshes, len(tabRefreshes))
+	}
+	queued[0]()
+	if rootRefreshes != 0 || len(tabRefreshes) != 1 || tabRefreshes[0] != TabEmprestimos {
+		t.Fatalf("refreshes after dispatch = root %d tabs %#v, want one Emprestimos tab refresh", rootRefreshes, tabRefreshes)
+	}
+	if state.ActiveTab != TabEmprestimos {
+		t.Fatalf("ActiveTab = %q, want %q", state.ActiveTab, TabEmprestimos)
+	}
+}
+
+func TestAppStateFullRefreshSupersedesQueuedTabRefresh(t *testing.T) {
+	state := NewAppState(testConfig())
+	queued := make([]func(), 0)
+	state.Runner = NewAsyncRunner(func(fn func()) { queued = append(queued, fn) })
+	rootRefreshes := 0
+	tabRefreshes := 0
+	state.RefreshUI = func() { rootRefreshes++ }
+	state.RefreshTabUI = func(string) { tabRefreshes++ }
+
+	state.Refresh()
+	state.RefreshTab(TabEmprestimos)
+
+	if len(queued) != 1 {
+		t.Fatalf("queued refreshes = %d, want 1", len(queued))
+	}
+	queued[0]()
+	if rootRefreshes != 1 || tabRefreshes != 0 {
+		t.Fatalf("refreshes after dispatch = root %d tabs %d, want root 1 tabs 0", rootRefreshes, tabRefreshes)
+	}
+	if state.ActiveTab != TabEmprestimos {
+		t.Fatalf("ActiveTab = %q, want %q", state.ActiveTab, TabEmprestimos)
 	}
 }
 

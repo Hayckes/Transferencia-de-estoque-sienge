@@ -76,6 +76,13 @@ func TestAddTransferInsumoAddsSingleItemWithAppropriations(t *testing.T) {
 	}
 }
 
+func TestBuildTransferenciaTabAllowsCompactWidthWithItems(t *testing.T) {
+	minSize := BuildTransferenciaTab(validTransferStateWithItem()).MinSize()
+	if minSize.Width > compactWindowMaxMinWidth {
+		t.Fatalf("BuildTransferenciaTab().MinSize().Width = %v, want at most %v", minSize.Width, compactWindowMaxMinWidth)
+	}
+}
+
 func TestLoadTransferInsumoBuildsItemWithoutMutatingState(t *testing.T) {
 	stock := &fakeStockService{
 		items: []models.Insumo{{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC", Quantidade: 150}},
@@ -470,6 +477,20 @@ func TestBuildTransferenciaTabDoesNotRefreshWhileInitializingAppropriationSelect
 	}
 	if refreshes != 0 {
 		t.Fatalf("BuildTransferenciaTab() triggered %d refresh(es), want 0", refreshes)
+	}
+}
+
+func TestBuildTransferenciaTabDoesNotLoadReturnLoans(t *testing.T) {
+	state := validTransferState()
+	state.Transferencia.TransferKind = models.TransferKindReturn
+	store := &countingLoanStore{fakeLoanStore: fakeLoanStore{loans: uiTestLoans()}}
+	state.LoanStore = store
+
+	if BuildTransferenciaTab(state) == nil {
+		t.Fatal("BuildTransferenciaTab() returned nil")
+	}
+	if store.listCalls != 0 {
+		t.Fatalf("ListLoans calls = %d, want 0", store.listCalls)
 	}
 }
 

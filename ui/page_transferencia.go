@@ -73,22 +73,26 @@ func (item TransferenciaItemState) selectedDestinationAppropriation() models.Apr
 }
 
 type TransferenciaTabState struct {
-	ObraOrigem      string
-	ObraDestino     string
-	Solicitante     string
-	Observacao      string
-	CodigoDocumento string
-	CodigoMovimento string
-	InsumoIDInput   string
-	Itens           []TransferenciaItemState
-	IsSubmitting    bool
-	FeedbackMessage string
+	ObraOrigem              string
+	ObraDestino             string
+	Solicitante             string
+	Observacao              string
+	CodigoDocumento         string
+	CodigoMovimento         string
+	InsumoIDInput           string
+	TransferKind            models.TransferKind
+	SelectedLoanID          string
+	AvailableLoansForReturn []models.LoanRecord
+	Itens                   []TransferenciaItemState
+	IsSubmitting            bool
+	FeedbackMessage         string
 }
 
 func NewTransferenciaTabState() TransferenciaTabState {
 	return TransferenciaTabState{
 		CodigoDocumento: "TR",
 		CodigoMovimento: "3",
+		TransferKind:    models.TransferKindNotApplicable,
 	}
 }
 
@@ -135,6 +139,54 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	status := NewStatusView(state.Window, state.Transferencia.FeedbackMessage)
 	if api.TransferDryRunEnabled() {
 		setTransferStatus(state, status, "Modo seguro ativo: TRANSFER_DRY_RUN=true. O envio real ao Sienge esta bloqueado.")
+	}
+	initializingLoanSelect := true
+	loanSelect := widget.NewSelect(LoanReturnOptionLabels(state.Transferencia.AvailableLoansForReturn), func(value string) {
+		if initializingLoanSelect {
+			return
+		}
+		loan, ok := LoanByReturnOptionLabel(state.Transferencia.AvailableLoansForReturn, value)
+		if !ok {
+			state.Transferencia.SelectedLoanID = ""
+			return
+		}
+		PrepareTransferReturnFromLoan(state, loan, loan.PendingItems())
+		setTransferStatus(state, status, "Emprestimo selecionado para devolucao. Revise os saldos antes de enviar.")
+		state.RefreshTab(TabTransferencia)
+	})
+	loanSelect.PlaceHolder = "Emprestimo para devolver (opcional)"
+	if state.Transferencia.SelectedLoanID != "" {
+		if loan, ok := LoanByID(state.Transferencia.AvailableLoansForReturn, state.Transferencia.SelectedLoanID); ok {
+			loanSelect.SetSelected(LoanReturnOptionLabel(loan))
+		}
+	}
+	initializingTransferKind := true
+	transferKindRadio := widget.NewRadioGroup(TransferKindLabels(), func(value string) {
+		if initializingTransferKind {
+			return
+		}
+		state.Transferencia.TransferKind = models.TransferKindFromLabel(value)
+		if state.Transferencia.TransferKind == models.TransferKindReturn {
+			if err := RefreshReturnLoansForTransfer(state); err != nil {
+				setTransferStatus(state, status, "Nao foi possivel carregar emprestimos para devolucao: "+err.Error())
+				state.RefreshTab(TabTransferencia)
+				return
+			}
+			if len(state.Transferencia.AvailableLoansForReturn) == 0 {
+				setTransferStatus(state, status, "Nao ha emprestimos pendentes ou parcialmente devolvidos para devolucao.")
+			}
+		} else {
+			state.Transferencia.SelectedLoanID = ""
+		}
+		state.RefreshTab(TabTransferencia)
+	})
+	transferKindRadio.Horizontal = true
+	transferKindRadio.SetSelected(models.TransferKindLabel(effectiveTransferKindState(state)))
+	initializingTransferKind = false
+	initializingLoanSelect = false
+	loanSelectorSection := container.NewVBox(widget.NewLabel("Emprestimo vinculado"), expandingInput(loanSelect))
+	if effectiveTransferKindState(state) != models.TransferKindReturn {
+		loanSelectorSection.Hide()
 	}
 	addButton := widget.NewButton("Adicionar Insumo", func() {
 		state.ActiveTab = TabTransferencia
@@ -193,14 +245,20 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 			return
 		}
 		ShowConfirmTransferModal(state.Window, transfer, func() {
+			release, err := BeginTransferSubmission(state)
+			if err != nil {
+				setTransferStatus(state, status, err.Error())
+				return
+			}
 			setTransferStatus(state, status, StatusLoading)
 			sendButton.Disable()
 			movementID := ""
 			state.Runner.Run(func() error {
 				var err error
-				movementID, err = SendTransferencia(context.Background(), state)
+				movementID, err = SendPreparedTransferencia(context.Background(), state, transfer)
 				return err
 			}, func(err error) {
+				release()
 				sendButton.Enable()
 				if err != nil {
 					if MaybeShowCredentialReonboarding(state, err, status.SetText) {
@@ -209,6 +267,13 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 					setTransferStatus(state, status, "Erro ao enviar transferencia: "+err.Error())
 					return
 				}
+				if state.HistoryStore != nil {
+					_ = RefreshHistorico(state)
+				}
+				if state.LoanStore != nil {
+					_ = RefreshEmprestimos(state)
+				}
+				ClearTransferencia(state)
 				setTransferStatus(state, status, TransferSuccessFeedback(movementID))
 				state.RefreshTab(TabTransferencia)
 			})
@@ -219,9 +284,17 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	}
 
 	recalculateButton := widget.NewButton("Recalcular saldos", func() {
+		originID, destinationID, items, err := SnapshotTransferRecalculationInput(state, -1, RecalculateByButton)
+		if err != nil {
+			setTransferStatus(state, status, transferRecalculateErrorFeedback(err))
+			return
+		}
 		setTransferStatus(state, status, StatusLoading)
+		var updatedItems []TransferenciaItemState
 		state.Runner.Run(func() error {
-			return HandleRecalculateTrigger(context.Background(), state, -1, RecalculateByButton)
+			var err error
+			updatedItems, err = RecalculateTransferSaldosForItems(context.Background(), state.Stock, originID, destinationID, items)
+			return err
 		}, func(err error) {
 			if err != nil {
 				if MaybeShowCredentialReonboarding(state, err, status.SetText) {
@@ -230,6 +303,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 				setTransferStatus(state, status, "Nao foi possivel recalcular os saldos: "+err.Error())
 				return
 			}
+			state.Transferencia.Itens = updatedItems
 			setTransferStatus(state, status, "Saldos recalculados com sucesso.")
 			state.RefreshTab(TabTransferencia)
 		})
@@ -274,9 +348,17 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 				return
 			}
 			state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value
+			originID, destinationID, items, err := SnapshotTransferRecalculationInput(state, rowIndex, RecalculateByQuantityFocusLost)
+			if err != nil {
+				setTransferStatus(state, status, transferRecalculateErrorFeedback(err))
+				return
+			}
 			setTransferStatus(state, status, StatusLoading)
+			var updatedItems []TransferenciaItemState
 			state.Runner.Run(func() error {
-				return HandleRecalculateTrigger(context.Background(), state, rowIndex, RecalculateByQuantityFocusLost)
+				var err error
+				updatedItems, err = RecalculateTransferSaldosForItems(context.Background(), state.Stock, originID, destinationID, items)
+				return err
 			}, func(err error) {
 				if err != nil {
 					if MaybeShowCredentialReonboarding(state, err, status.SetText) {
@@ -285,6 +367,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 					setTransferStatus(state, status, transferRecalculateErrorFeedback(err))
 					return
 				}
+				state.Transferencia.Itens = updatedItems
 				if rowIndex >= 0 && rowIndex < len(state.Transferencia.Itens) {
 					quantityEntry.SetText(state.Transferencia.Itens[rowIndex].QuantidadeTransferir)
 				}
@@ -294,8 +377,16 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		})
 		quantityEntry.SetPlaceHolder("Qtd.")
 		quantityEntry.SetText(item.QuantidadeTransferir)
-		quantityEntry.OnChanged = func(value string) { state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value }
+		quantityEntry.OnChanged = func(value string) {
+			if rowIndex < 0 || rowIndex >= len(state.Transferencia.Itens) {
+				return
+			}
+			state.Transferencia.Itens[rowIndex].QuantidadeTransferir = value
+		}
 		quantityEntry.OnSubmitted = func(value string) {
+			if rowIndex < 0 || rowIndex >= len(state.Transferencia.Itens) {
+				return
+			}
 			formatted, _, err := NormalizeQuantityInput(value)
 			if err != nil {
 				setTransferStatus(state, status, transferRecalculateErrorFeedback(err))
@@ -307,7 +398,7 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 		}
 		removeButton := widget.NewButton("Remover", func() {
 			_ = RemoveTransferItem(state, rowIndex)
-			status.SetText("Insumo removido.")
+			setTransferStatus(state, status, "Insumo removido.")
 			state.RefreshTab(TabTransferencia)
 		})
 		rows = append(rows, container.NewVBox(
@@ -336,17 +427,19 @@ func BuildTransferenciaTab(state *AppState) fyne.CanvasObject {
 	})
 
 	workRow := container.NewGridWithColumns(2, origemSelect, destinoSelect)
+	typeSection := container.NewVBox(widget.NewLabel("Tipo da transferencia"), transferKindRadio, loanSelectorSection)
 	requesterRow := container.NewBorder(nil, nil, nil, container.NewHBox(widget.NewLabel("Documento: TR"), withMinObjectWidth(movimentoEntry, 180)), solicitanteEntry)
 	itemInputRow := container.NewBorder(nil, nil, nil, container.NewHBox(addButton, recalculateButton, sendButton, clearButton), insumoEntry)
 
 	return scrollablePage(
 		widget.NewLabel("Transferencia de insumos"),
+		typeSection,
 		workRow,
 		requesterRow,
 		observacaoEntry,
 		itemInputRow,
 		status.Object(),
-		container.NewHScroll(container.NewVBox(rows...)),
+		horizontalScrollbarOnly(container.NewVBox(rows...)),
 	)
 }
 
@@ -541,14 +634,22 @@ func SetTransferItemAppropriation(state *AppState, index int, code string) error
 }
 
 func SetTransferItemOriginAppropriation(state *AppState, index int, code string) error {
-	if index < 0 || index >= len(state.Transferencia.Itens) {
+	return setTransferItemOriginAppropriation(state.Transferencia.Itens, index, code)
+}
+
+func SetTransferItemDestinationAppropriation(state *AppState, index int, code string) error {
+	return setTransferItemDestinationAppropriation(state.Transferencia.Itens, index, code)
+}
+
+func setTransferItemOriginAppropriation(items []TransferenciaItemState, index int, code string) error {
+	if index < 0 || index >= len(items) {
 		return errors.New("insumo da transferencia nao encontrado")
 	}
 	code = strings.TrimSpace(code)
-	for _, appropriation := range state.Transferencia.Itens[index].ApropriacoesOrigem {
+	for _, appropriation := range items[index].ApropriacoesOrigem {
 		if appropriationMatchesSelection(appropriation, code) {
-			state.Transferencia.Itens[index].ApropriacaoOrigemSelecionada = AppropriationOptionLabel(appropriation)
-			state.Transferencia.Itens[index].QuantidadeDisponivel = appropriation.Quantidade
+			items[index].ApropriacaoOrigemSelecionada = AppropriationOptionLabel(appropriation)
+			items[index].QuantidadeDisponivel = appropriation.Quantidade
 			return nil
 		}
 	}
@@ -556,14 +657,14 @@ func SetTransferItemOriginAppropriation(state *AppState, index int, code string)
 	return errors.New("apropriacao de origem selecionada nao encontrada")
 }
 
-func SetTransferItemDestinationAppropriation(state *AppState, index int, code string) error {
-	if index < 0 || index >= len(state.Transferencia.Itens) {
+func setTransferItemDestinationAppropriation(items []TransferenciaItemState, index int, code string) error {
+	if index < 0 || index >= len(items) {
 		return errors.New("insumo da transferencia nao encontrado")
 	}
 	code = strings.TrimSpace(code)
-	for _, appropriation := range state.Transferencia.Itens[index].ApropriacoesDestino {
+	for _, appropriation := range items[index].ApropriacoesDestino {
 		if appropriationMatchesSelection(appropriation, code) {
-			state.Transferencia.Itens[index].ApropriacaoDestinoSelecionada = AppropriationOptionLabel(appropriation)
+			items[index].ApropriacaoDestinoSelecionada = AppropriationOptionLabel(appropriation)
 			return nil
 		}
 	}
@@ -578,6 +679,16 @@ func RemoveTransferItem(state *AppState, index int) error {
 
 	state.Transferencia.Itens = append(state.Transferencia.Itens[:index], state.Transferencia.Itens[index+1:]...)
 	return nil
+}
+
+func cloneTransferItems(items []TransferenciaItemState) []TransferenciaItemState {
+	cloned := make([]TransferenciaItemState, len(items))
+	for index, item := range items {
+		cloned[index] = item
+		cloned[index].ApropriacoesOrigem = append([]models.Apropriacao(nil), item.ApropriacoesOrigem...)
+		cloned[index].ApropriacoesDestino = append([]models.Apropriacao(nil), item.ApropriacoesDestino...)
+	}
+	return cloned
 }
 
 func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) {
@@ -653,6 +764,8 @@ func BuildTransferenciaFromState(state *AppState) (models.Transferencia, error) 
 		ObraDestinoNome:     ObraNameByID(state.Config.Obras, destinationID),
 		CodigoTipoDocumento: "TR",
 		CodigoTipoMovimento: movementCode,
+		TransferKind:        effectiveTransferKindState(state),
+		LinkedLoanID:        strings.TrimSpace(state.Transferencia.SelectedLoanID),
 		Insumos:             items,
 	}
 	if validationErrors := ValidateTransferenciaState(transfer); len(validationErrors) > 0 {
@@ -758,6 +871,28 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 	}
 	defer release()
 
+	transfer, err := BuildTransferenciaFromState(state)
+	if err != nil {
+		return "", err
+	}
+	movementID, err := SendPreparedTransferencia(ctx, state, transfer)
+	if err != nil {
+		return "", err
+	}
+	if state.HistoryStore != nil {
+		_ = RefreshHistorico(state)
+	}
+	if state.LoanStore != nil {
+		_ = RefreshEmprestimos(state)
+	}
+	ClearTransferencia(state)
+	return movementID, nil
+}
+
+func SendPreparedTransferencia(ctx context.Context, state *AppState, transfer models.Transferencia) (string, error) {
+	if state == nil {
+		return "", errors.New("estado da aplicacao nao configurado")
+	}
 	if state.Transfer == nil {
 		return "", errors.New("servico de transferencia nao configurado")
 	}
@@ -765,15 +900,13 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 		return "", errors.New("armazenamento de transferencias nao configurado")
 	}
 
-	transfer, err := BuildTransferenciaFromState(state)
-	if err != nil {
+	if err := ValidateLoanReturnBeforeSend(state, transfer); err != nil {
 		return "", err
 	}
-	if err := RevalidateTransferBeforeSend(ctx, state, transfer); err != nil {
+	if err := RevalidateTransferSnapshotBeforeSend(ctx, state, transfer); err != nil {
 		return "", err
 	}
-	transfer, err = BuildTransferenciaFromState(state)
-	if err != nil {
+	if err := ValidateLoanReturnBeforeSend(state, transfer); err != nil {
 		return "", err
 	}
 	movementID, err := state.Transfer.CreateStockTransfer(ctx, transfer)
@@ -781,17 +914,16 @@ func SendTransferencia(ctx context.Context, state *AppState) (string, error) {
 		return "", err
 	}
 	transfer.IDMovimento = movementID
+	applyLoanSideEffects := PrepareLoanSideEffectsAfterSend(state, &transfer)
 	if err := state.TransferStore.AppendHistory(transfer); err != nil {
 		return "", errors.New(TransferLocalHistoryErrorFeedback(err))
 	}
 	if err := state.TransferStore.AppendTransferToExcel(transfer); err != nil {
 		return "", errors.New("Transferencia enviada com sucesso no Sienge, mas houve erro ao salvar a planilha local: " + err.Error())
 	}
-	if state.HistoryStore != nil {
-		_ = RefreshHistorico(state)
+	if err := applyLoanSideEffects(); err != nil {
+		return "", errors.New("Transferencia enviada com sucesso no Sienge e salva no historico local, mas houve erro ao atualizar emprestimos: " + err.Error())
 	}
-
-	ClearTransferencia(state)
 	return movementID, nil
 }
 
@@ -826,40 +958,82 @@ func RecalculateTransferSaldos(ctx context.Context, state *AppState) error {
 	if err != nil {
 		return err
 	}
-	for index := range state.Transferencia.Itens {
-		item := &state.Transferencia.Itens[index]
-		originItems, err := state.Stock.GetStockItemsByIDs(ctx, originID, []int{item.Insumo.ID})
+	updatedItems, err := RecalculateTransferSaldosForItems(ctx, state.Stock, originID, destinationID, state.Transferencia.Itens)
+	if err != nil {
+		return err
+	}
+	state.Transferencia.Itens = updatedItems
+	return nil
+}
+
+func SnapshotTransferRecalculationInput(state *AppState, itemIndex int, trigger RecalculateTrigger) (int, int, []TransferenciaItemState, error) {
+	if state == nil {
+		return 0, 0, nil, errors.New("estado da aplicacao nao configurado")
+	}
+	originID, err := TransferOriginID(state)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	destinationID, err := TransferDestinationID(state)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	items := cloneTransferItems(state.Transferencia.Itens)
+	if trigger == RecalculateByQuantityFocusLost {
+		if itemIndex < 0 || itemIndex >= len(items) {
+			return 0, 0, nil, errors.New("insumo da transferencia nao encontrado")
+		}
+		formatted, quantity, err := NormalizeQuantityInput(items[itemIndex].QuantidadeTransferir)
 		if err != nil {
-			return err
+			return 0, 0, nil, err
+		}
+		if available := items[itemIndex].QuantidadeDisponivel; available > 0 && quantity > available {
+			return 0, 0, nil, ErrTransferQuantityGreaterThanAvailable
+		}
+		items[itemIndex].QuantidadeTransferir = formatted
+	}
+	return originID, destinationID, items, nil
+}
+
+func RecalculateTransferSaldosForItems(ctx context.Context, stock StockService, originID int, destinationID int, items []TransferenciaItemState) ([]TransferenciaItemState, error) {
+	if stock == nil {
+		return nil, errors.New("servico de estoque nao configurado")
+	}
+	updatedItems := cloneTransferItems(items)
+	for index := range updatedItems {
+		item := &updatedItems[index]
+		originItems, err := stock.GetStockItemsByIDs(ctx, originID, []int{item.Insumo.ID})
+		if err != nil {
+			return nil, err
 		}
 		if stock := matchingStockQuantity(originItems, item.Insumo); stock > 0 {
 			item.EstoqueOrigemAntes = stock
 			item.Insumo.Quantidade = stock
 		}
-		destinationItems, err := state.Stock.GetStockItemsByIDs(ctx, destinationID, []int{item.Insumo.ID})
+		destinationItems, err := stock.GetStockItemsByIDs(ctx, destinationID, []int{item.Insumo.ID})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		item.EstoqueDestinoAntes = matchingStockQuantity(destinationItems, item.Insumo)
 
-		originAppropriations, err := state.Stock.GetStockAppropriationsWithDescriptionsForItem(ctx, originID, item.Insumo)
+		originAppropriations, err := stock.GetStockAppropriationsWithDescriptionsForItem(ctx, originID, item.Insumo)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		destinationAppropriations, err := state.Stock.GetStockAppropriationsWithDescriptionsForItem(ctx, destinationID, item.Insumo)
+		destinationAppropriations, err := stock.GetStockAppropriationsWithDescriptionsForItem(ctx, destinationID, item.Insumo)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		item.ApropriacoesOrigem = AppropriationsWithStock(originAppropriations)
 		item.ApropriacoesDestino = AppropriationsAvailableForTransfer(destinationAppropriations)
 		if item.ApropriacaoOrigemSelecionada != "" {
-			_ = SetTransferItemOriginAppropriation(state, index, item.ApropriacaoOrigemSelecionada)
+			_ = setTransferItemOriginAppropriation(updatedItems, index, item.ApropriacaoOrigemSelecionada)
 		}
 		if item.ApropriacaoDestinoSelecionada != "" {
-			_ = SetTransferItemDestinationAppropriation(state, index, item.ApropriacaoDestinoSelecionada)
+			_ = setTransferItemDestinationAppropriation(updatedItems, index, item.ApropriacaoDestinoSelecionada)
 		}
 	}
-	return nil
+	return updatedItems, nil
 }
 
 func HandleRecalculateTrigger(ctx context.Context, state *AppState, itemIndex int, trigger RecalculateTrigger) error {
@@ -915,6 +1089,70 @@ func RevalidateTransferBeforeSend(ctx context.Context, state *AppState, transfer
 		}
 	}
 	return nil
+}
+
+func RevalidateTransferSnapshotBeforeSend(ctx context.Context, state *AppState, transfer models.Transferencia) error {
+	if state == nil || state.Stock == nil {
+		return nil
+	}
+	for _, item := range transfer.Insumos {
+		stockItem := models.Insumo{ID: item.ID, DetalheID: item.DetalheID, MarcaID: item.MarcaID}
+		originItems, err := state.Stock.GetStockItemsByIDs(ctx, transfer.ObraOrigemID, []int{item.ID})
+		if err != nil {
+			return err
+		}
+		originStock := matchingStockQuantity(originItems, stockItem)
+		if item.QuantidadeEstoqueOrigemAntes != 0 && originStock > 0 && item.QuantidadeEstoqueOrigemAntes != originStock {
+			return errors.New("o estoque foi alterado desde a ultima consulta. Revise os saldos antes de enviar a transferencia")
+		}
+
+		destinationItems, err := state.Stock.GetStockItemsByIDs(ctx, transfer.ObraDestinoID, []int{item.ID})
+		if err != nil {
+			return err
+		}
+		if destinationStock := matchingStockQuantity(destinationItems, stockItem); item.QuantidadeEstoqueDestinoAntes != destinationStock {
+			return errors.New("o estoque foi alterado desde a ultima consulta. Revise os saldos antes de enviar a transferencia")
+		}
+
+		if err := validateSnapshotAppropriation(ctx, state.Stock, transfer.ObraOrigemID, stockItem, item.ApropriacaoOrigemCodigo, item.ApropriacaoOrigemBuildingUnitID, item.ApropriacaoOrigemSheetItemID, item.QuantidadeApropriacaoOrigemAntes); err != nil {
+			return err
+		}
+		if err := validateSnapshotAppropriation(ctx, state.Stock, transfer.ObraDestinoID, stockItem, item.ApropriacaoDestino, item.ApropriacaoDestinoBuildingUnitID, item.ApropriacaoDestinoSheetItemID, item.QuantidadeApropriacaoDestinoAntes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSnapshotAppropriation(ctx context.Context, stock StockService, workID int, item models.Insumo, code string, buildingUnitID int, sheetItemID int, expected *float64) error {
+	if expected == nil {
+		return nil
+	}
+	appropriations, err := stock.GetStockAppropriationsWithDescriptionsForItem(ctx, workID, item)
+	if err != nil {
+		return err
+	}
+	current, ok := matchingAppropriationQuantity(appropriations, code, buildingUnitID, sheetItemID)
+	if !ok || current != *expected {
+		return errors.New("o estoque foi alterado desde a ultima consulta. Revise os saldos antes de enviar a transferencia")
+	}
+	return nil
+}
+
+func matchingAppropriationQuantity(appropriations []models.Apropriacao, code string, buildingUnitID int, sheetItemID int) (float64, bool) {
+	for _, appropriation := range appropriations {
+		if strings.TrimSpace(appropriation.Codigo) != strings.TrimSpace(code) {
+			continue
+		}
+		if buildingUnitID > 0 && appropriation.BuildingUnitID != buildingUnitID {
+			continue
+		}
+		if sheetItemID > 0 && appropriation.SheetItemID != sheetItemID {
+			continue
+		}
+		return appropriation.Quantidade, true
+	}
+	return 0, false
 }
 
 func TransferOriginID(state *AppState) (int, error) {

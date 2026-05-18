@@ -73,7 +73,7 @@ func ShowInsumoSelectionModal(window fyne.Window, options []models.Insumo, onSel
 			d.Hide()
 		}
 		if onSelect != nil {
-			onSelect(selected)
+			fyne.Do(func() { onSelect(selected) })
 		}
 	})
 	selectButton.Disable()
@@ -116,7 +116,7 @@ func ShowConfirmTransferModal(window fyne.Window, transfer models.Transferencia,
 	)
 	d := dialog.NewCustomConfirm("Confirmar Transferencia", "Enviar", "Cancelar", content, func(confirm bool) {
 		if confirm && onConfirm != nil {
-			onConfirm()
+			fyne.Do(onConfirm)
 		}
 	}, window)
 	d.Resize(sizeAtLeastWindowRatio(d.MinSize(), window.Canvas().Size(), 0.55, 0.55))

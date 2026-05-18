@@ -52,6 +52,16 @@ func TestBuildConsultaViewModel_ForSolicitacaoCompra(t *testing.T) {
 	}
 }
 
+func TestBuildConsultaTabAllowsCompactWidth(t *testing.T) {
+	state := NewAppState(testConfig())
+	state.Config.Obras = []models.Obra{{ID: 121, Nome: strings.Repeat("Obra com nome longo ", 8)}}
+
+	minSize := BuildConsultaTab(state).MinSize()
+	if minSize.Width > compactWindowMaxMinWidth {
+		t.Fatalf("BuildConsultaTab().MinSize().Width = %v, want at most %v", minSize.Width, compactWindowMaxMinWidth)
+	}
+}
+
 func TestValidateConsultaInput(t *testing.T) {
 	state := NewAppState(testConfig())
 	state.Consulta.ObraSelecionada = "121 - Residencial Novo Horizonte"

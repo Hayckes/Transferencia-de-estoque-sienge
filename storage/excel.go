@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/xuri/excelize/v2"
 
@@ -17,31 +18,24 @@ const (
 )
 
 var ExcelHeaders = []string{
-	"ID Movimento Sienge",
+	"ID de Transferencia",
 	"Data/Hora",
 	"Usuario",
 	"Cargo",
 	"Solicitante",
 	"Observacao",
-	"Codigo Tipo Documento",
-	"Codigo Tipo Movimento",
-	"Obra Origem ID",
-	"Obra Origem Nome",
-	"Apropriacao Origem Codigo",
-	"Apropriacao Origem Descricao",
-	"Apropriacao Origem BuildingUnitID",
-	"Apropriacao Origem SheetItemID",
+	"ID Obra Origem",
+	"Nome Obra Origem",
+	"Apropriacao Origem",
 	"Quantidade Origem no Momento da Transferencia",
 	"Quantidade Enviada",
 	"Quantidade Origem Apos Transferencia",
 	"Quantidade Apropriacao Origem no Momento da Transferencia",
 	"Quantidade Apropriacao Origem Apos Transferencia",
-	"Obra Destino ID",
-	"Obra Destino Nome",
+	"ID Obra Destino",
+	"Nome Obra Destino",
 	"Apropriacao Destino Codigo",
 	"Apropriacao Destino Descricao",
-	"Apropriacao Destino BuildingUnitID",
-	"Apropriacao Destino SheetItemID",
 	"Quantidade Destino no Momento da Transferencia",
 	"Quantidade Recebida",
 	"Quantidade Destino Apos Transferencia",
@@ -50,17 +44,33 @@ var ExcelHeaders = []string{
 	"Insumo ID",
 	"Nome do Insumo",
 	"Detalhe",
-	"Detalhe ID",
 	"Marca",
-	"Marca ID",
 	"Unidade",
-	"Preco Unitario",
+	"Tipo da Transferencia",
+	"Status do Emprestimo",
 }
 
 func (s Store) EnsureExcelFromHistory() error {
 	_, err := os.Stat(s.ExcelPath())
 	if err == nil {
-		return nil
+		matches, err := excelHeadersMatch(s.ExcelPath())
+		if err != nil {
+			return err
+		}
+		if matches {
+			styled, err := excelLoanStatusStylesMatch(s.ExcelPath())
+			if err != nil {
+				return err
+			}
+			if styled {
+				return nil
+			}
+		}
+		history, err := s.ReadHistory()
+		if err != nil {
+			return err
+		}
+		return s.RebuildExcel(history)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -72,6 +82,67 @@ func (s Store) EnsureExcelFromHistory() error {
 	}
 
 	return s.RebuildExcel(history)
+}
+
+func excelHeadersMatch(path string) (bool, error) {
+	file, err := excelize.OpenFile(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	rows, err := file.GetRows(excelSheetName)
+	if err != nil {
+		return false, err
+	}
+	if len(rows) == 0 || len(rows[0]) != len(ExcelHeaders) {
+		return false, nil
+	}
+	for index, header := range ExcelHeaders {
+		if rows[0][index] != header {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func excelLoanStatusStylesMatch(path string) (bool, error) {
+	file, err := excelize.OpenFile(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	rows, err := file.GetRows(excelSheetName)
+	if err != nil {
+		return false, err
+	}
+	for index, row := range rows {
+		if index == 0 || len(row) < len(ExcelHeaders) {
+			continue
+		}
+		wantColor, ok := loanStatusExcelFillColor(row[len(ExcelHeaders)-1])
+		if !ok {
+			continue
+		}
+		cell, err := excelize.CoordinatesToCellName(len(ExcelHeaders), index+1)
+		if err != nil {
+			return false, err
+		}
+		styleID, err := file.GetCellStyle(excelSheetName, cell)
+		if err != nil {
+			return false, err
+		}
+		style, err := file.GetStyle(styleID)
+		if err != nil {
+			return false, err
+		}
+		if !excelStyleHasFillColor(style, wantColor) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s Store) RebuildExcel(history []models.Transferencia) error {
@@ -91,13 +162,15 @@ func (s Store) RebuildExcel(history []models.Transferencia) error {
 	}
 
 	nextRow := 2
+	transferID := 1
 	for _, transfer := range history {
 		for _, item := range transfer.Insumos {
-			if err := writeExcelRow(file, nextRow, transfer, item); err != nil {
+			if err := writeExcelRow(file, nextRow, transferID, transfer, item); err != nil {
 				return err
 			}
 			nextRow++
 		}
+		transferID++
 	}
 
 	return saveExcelAtomically(file, s.ExcelPath())
@@ -133,8 +206,12 @@ func (s Store) AppendTransferToExcel(transfer models.Transferencia) error {
 	if err != nil {
 		return err
 	}
+	transferID, err := nextExcelTransferID(file)
+	if err != nil {
+		return err
+	}
 	for _, item := range transfer.Insumos {
-		if err := writeExcelRow(file, nextRow, transfer, item); err != nil {
+		if err := writeExcelRow(file, nextRow, transferID, transfer, item); err != nil {
 			return err
 		}
 		nextRow++
@@ -199,53 +276,50 @@ func writeExcelHeaders(file *excelize.File) error {
 	if err := file.SetPanes(excelSheetName, &excelize.Panes{Freeze: true, Split: false, XSplit: 0, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"}); err != nil {
 		return err
 	}
-	if err := file.SetColWidth(excelSheetName, "A", "AL", 18); err != nil {
+	lastColumn, err := excelize.ColumnNumberToName(len(ExcelHeaders))
+	if err != nil {
+		return err
+	}
+	if err := file.SetColWidth(excelSheetName, "A", lastColumn, 18); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func writeExcelRow(file *excelize.File, row int, transfer models.Transferencia, item models.ItemTransferido) error {
+func writeExcelRow(file *excelize.File, row int, transferID int, transfer models.Transferencia, item models.ItemTransferido) error {
+	unit := item.Unidade
 	values := []any{
-		transfer.IDMovimento,
+		transferID,
 		transfer.DataHora.Format("02/01/2006 15:04:05"),
 		transfer.Usuario,
 		transfer.Cargo,
 		transfer.Solicitante,
 		transfer.Observacao,
-		transfer.CodigoTipoDocumento,
-		transfer.CodigoTipoMovimento,
 		transfer.ObraOrigemID,
 		transfer.ObraOrigemNome,
-		notApplicableString(item.ApropriacaoOrigemCodigo, item.Apropriacao),
-		notApplicableString(item.ApropriacaoOrigemDescricao, item.ApropriacaoDescricao),
-		notApplicableInt(item.ApropriacaoOrigemBuildingUnitID),
-		notApplicableInt(item.ApropriacaoOrigemSheetItemID),
-		item.QuantidadeEstoqueOrigemAntes,
-		quantityOrFallback(item.QuantidadeEnviada, item.Quantidade),
-		item.QuantidadeEstoqueOrigemDepois,
-		notApplicableFloat(item.QuantidadeApropriacaoOrigemAntes),
-		notApplicableFloat(item.QuantidadeApropriacaoOrigemDepois),
+		excelAppropriation(item.ApropriacaoOrigemCodigo, item.Apropriacao, item.ApropriacaoOrigemDescricao, item.ApropriacaoDescricao),
+		excelQuantity(item.QuantidadeEstoqueOrigemAntes, unit),
+		excelQuantity(quantityOrFallback(item.QuantidadeEnviada, item.Quantidade), unit),
+		excelQuantity(item.QuantidadeEstoqueOrigemDepois, unit),
+		excelOptionalQuantity(item.QuantidadeApropriacaoOrigemAntes, unit),
+		excelOptionalQuantity(item.QuantidadeApropriacaoOrigemDepois, unit),
 		transfer.ObraDestinoID,
 		transfer.ObraDestinoNome,
 		notApplicableString(item.ApropriacaoDestinoCodigo, item.ApropriacaoDestino),
 		notApplicableString(item.ApropriacaoDestinoDescricaoSnapshot, item.ApropriacaoDestinoDescricao),
-		notApplicableInt(item.ApropriacaoDestinoBuildingUnitID),
-		notApplicableInt(item.ApropriacaoDestinoSheetItemID),
-		item.QuantidadeEstoqueDestinoAntes,
-		quantityOrFallback(item.QuantidadeRecebida, item.Quantidade),
-		item.QuantidadeEstoqueDestinoDepois,
-		notApplicableFloat(item.QuantidadeApropriacaoDestinoAntes),
-		notApplicableFloat(item.QuantidadeApropriacaoDestinoDepois),
+		excelQuantity(item.QuantidadeEstoqueDestinoAntes, unit),
+		excelQuantity(quantityOrFallback(item.QuantidadeRecebida, item.Quantidade), unit),
+		excelQuantity(item.QuantidadeEstoqueDestinoDepois, unit),
+		excelOptionalQuantity(item.QuantidadeApropriacaoDestinoAntes, unit),
+		excelOptionalQuantity(item.QuantidadeApropriacaoDestinoDepois, unit),
 		item.ID,
 		item.Nome,
 		item.Detalhe,
-		item.DetalheID,
 		item.Marca,
-		item.MarcaID,
 		item.Unidade,
-		item.PrecoUnitario,
+		models.TransferKindLabel(transfer.TransferKind),
+		loanStatusForExcel(transfer),
 	}
 
 	for index, value := range values {
@@ -258,7 +332,84 @@ func writeExcelRow(file *excelize.File, row int, transfer models.Transferencia, 
 		}
 	}
 
+	if err := applyLoanStatusExcelStyle(file, row, loanStatusForExcel(transfer)); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func applyLoanStatusExcelStyle(file *excelize.File, row int, status string) error {
+	fillColor, ok := loanStatusExcelFillColor(status)
+	if !ok {
+		return nil
+	}
+	styleID, err := file.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Color: []string{fillColor}, Pattern: 1},
+		Alignment: &excelize.Alignment{
+			Horizontal: "center",
+			Vertical:   "center",
+		},
+	})
+	if err != nil {
+		return err
+	}
+	cell, err := excelize.CoordinatesToCellName(len(ExcelHeaders), row)
+	if err != nil {
+		return err
+	}
+	return file.SetCellStyle(excelSheetName, cell, cell, styleID)
+}
+
+func loanStatusExcelFillColor(status string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case strings.ToLower(models.LoanStatusLabel(models.LoanStatusPending)):
+		return "FF0000", true
+	case strings.ToLower(models.LoanStatusLabel(models.LoanStatusReturned)):
+		return "00B050", true
+	case strings.ToLower(models.LoanStatusLabel(models.LoanStatusPartiallyReturned)):
+		return "0070C0", true
+	default:
+		return "", false
+	}
+}
+
+func excelStyleHasFillColor(style *excelize.Style, color string) bool {
+	if style == nil || style.Fill.Type != "pattern" || style.Fill.Pattern == 0 {
+		return false
+	}
+	for _, current := range style.Fill.Color {
+		if strings.EqualFold(current, color) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextExcelTransferID(file *excelize.File) (int, error) {
+	rows, err := file.GetRows(excelSheetName)
+	if err != nil {
+		return 0, err
+	}
+	maxID := 0
+	for index, row := range rows {
+		if index == 0 || len(row) == 0 {
+			continue
+		}
+		id, err := strconv.Atoi(row[0])
+		if err == nil && id > maxID {
+			maxID = id
+		}
+	}
+	return maxID + 1, nil
+}
+
+func loanStatusForExcel(transfer models.Transferencia) string {
+	if models.EffectiveTransferKind(transfer.TransferKind) == models.TransferKindNotApplicable || transfer.LoanStatus == "" {
+		return "Nao se aplica"
+	}
+	return models.LoanStatusLabel(transfer.LoanStatus)
 }
 
 func notApplicableString(values ...string) string {
@@ -270,18 +421,27 @@ func notApplicableString(values ...string) string {
 	return "Nao se aplica"
 }
 
-func notApplicableInt(value int) any {
-	if value <= 0 {
-		return "Nao se aplica"
-	}
-	return value
-}
-
-func notApplicableFloat(value *float64) any {
+func excelOptionalQuantity(value *float64, unit string) string {
 	if value == nil {
 		return "Nao se aplica"
 	}
-	return *value
+	return excelQuantity(*value, unit)
+}
+
+func excelQuantity(value float64, unit string) string {
+	return models.FormatQuantidade(value, unit)
+}
+
+func excelAppropriation(codeValues ...string) string {
+	code := notApplicableString(codeValues[0], codeValues[1])
+	description := notApplicableString(codeValues[2], codeValues[3])
+	if code == "Nao se aplica" {
+		return code
+	}
+	if description == "Nao se aplica" {
+		return code
+	}
+	return code + " - " + description
 }
 
 func quantityOrFallback(value float64, fallback float64) float64 {

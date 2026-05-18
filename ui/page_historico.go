@@ -50,7 +50,7 @@ func BuildHistoricoTab(state *AppState) fyne.CanvasObject {
 		widget.NewLabel("Historico resumido"),
 		responsiveRow(refreshButton, excelButton),
 		status.Object(),
-		container.NewHScroll(container.NewVBox(rows...)),
+		horizontalScrollbarOnly(container.NewVBox(rows...)),
 	)
 }
 

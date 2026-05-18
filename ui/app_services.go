@@ -34,11 +34,25 @@ func NewConfiguredAppState(cfg models.Config, store config.Store, window fyne.Wi
 	dataStore := storage.NewStore(store.Dir)
 	state.TransferStore = dataStore
 	state.HistoryStore = dataStore
+	state.LoanStore = dataStore
 	ConfigureAPIClient(state)
 	state.RefreshUI = func() {
-		window.SetContent(BuildMainContent(state))
+		if state.mainShell == nil {
+			content := BuildMainContent(state)
+			window.SetContent(content)
+			return
+		}
+		state.mainShell.RefreshAll(state)
+	}
+	state.RefreshTabUI = func(tab string) {
+		if state.mainShell == nil {
+			state.RefreshUI()
+			return
+		}
+		state.mainShell.RefreshTab(state, tab)
 	}
 	_ = RefreshHistorico(state)
+	_ = RefreshEmprestimos(state)
 	return state
 }
 

@@ -67,6 +67,9 @@ type Transferencia struct {
 	ObraDestinoNome     string            `json:"obra_destino_nome"`
 	CodigoTipoDocumento string            `json:"codigo_tipo_documento"`
 	CodigoTipoMovimento int               `json:"codigo_tipo_movimento"`
+	TransferKind        TransferKind      `json:"transfer_kind,omitempty"`
+	LinkedLoanID        string            `json:"linked_loan_id,omitempty"`
+	LoanStatus          LoanStatus        `json:"loan_status,omitempty"`
 	Insumos             []ItemTransferido `json:"insumos"`
 }
 

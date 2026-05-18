@@ -182,8 +182,8 @@ func testTransfer(id string) models.Transferencia {
 		CodigoTipoDocumento: "TR",
 		CodigoTipoMovimento: 3,
 		Insumos: []models.ItemTransferido{
-			{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Apropriacao: "A001", ApropriacaoDestino: "D001", Quantidade: 50},
-			{ID: 9876, Nome: "Areia", Detalhe: "Media", Marca: "Regional", Apropriacao: "A002", ApropriacaoDestino: "D002", Quantidade: 20.5},
+			{ID: 3421, Nome: "Cimento", Detalhe: "CP III", Marca: "Votorantim", Unidade: "SC", Apropriacao: "A001", ApropriacaoDestino: "D001", Quantidade: 50},
+			{ID: 9876, Nome: "Areia", Detalhe: "Media", Marca: "Regional", Unidade: "M3", Apropriacao: "A002", ApropriacaoDestino: "D002", Quantidade: 20.5},
 		},
 	}
 }
